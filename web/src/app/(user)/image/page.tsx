@@ -64,6 +64,9 @@ type GenerationLog = {
     thumbnails: string[];
     errors: string[];
     categoryIds: string[];
+    workflowId?: string;
+    workflowName?: string;
+    workflowInputs?: Record<string, unknown>;
 };
 
 type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "quality" | "size" | "count" | "apiMode" | "outputFormat" | "outputCompression" | "moderation" | "timeout" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli">;
@@ -1348,6 +1351,7 @@ function HistoryLogCard({
     const [expanded, setExpanded] = useState(false);
     const [categoryOpen, setCategoryOpen] = useState(false);
     const [categoryName, setCategoryName] = useState("");
+    const categoryMenuRef = useRef<HTMLDivElement>(null);
     const logCategories = categories.filter((category) => log.categoryIds.includes(category.id));
     const createCategory = async () => {
         const category = await onCreateCategory(categoryName);
@@ -1360,6 +1364,15 @@ function HistoryLogCard({
         setCategoryOpen(false);
         action();
     };
+
+    useEffect(() => {
+        if (!categoryOpen) return;
+        const closeOnOutsidePointer = (event: PointerEvent) => {
+            if (!categoryMenuRef.current?.contains(event.target as Node)) setCategoryOpen(false);
+        };
+        document.addEventListener("pointerdown", closeOnOutsidePointer);
+        return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+    }, [categoryOpen]);
 
     return (
         <div className={`overflow-hidden rounded-lg border bg-background dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 dark:border-stone-800"}`}>
@@ -1410,6 +1423,11 @@ function HistoryLogCard({
                     ) : (
                         <Tag className="m-0 text-[10px]">未分类</Tag>
                     )}
+                    {log.workflowName ? (
+                        <Tag className="m-0 text-[10px]" color="cyan">
+                            工作流 {log.workflowName}
+                        </Tag>
+                    ) : null}
                     <Tag className="m-0 text-[10px]">{formatLogTime(log.createdAt)}</Tag>
                     <Tag className="m-0 text-[10px]">{log.model}</Tag>
                     <Tag className="m-0 text-[10px]">{log.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
@@ -1425,7 +1443,7 @@ function HistoryLogCard({
                 {log.errors[0] ? <div className="line-clamp-2 rounded-md bg-red-100 px-2 py-1 text-red-600 dark:bg-red-950/40 dark:text-red-300">{log.errors[0]}</div> : null}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
-                <div className="relative flex flex-wrap gap-1">
+                <div ref={categoryMenuRef} className="relative flex flex-wrap gap-1">
                     <Button size="small" onClick={() => closeThen(onPreview)}>
                         载入
                     </Button>
@@ -1542,6 +1560,9 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         thumbnails: images.map((image) => image.dataUrl),
         errors: log.errors || [],
         categoryIds: Array.isArray(log.categoryIds) ? log.categoryIds : [],
+        workflowId: log.workflowId,
+        workflowName: log.workflowName,
+        workflowInputs: log.workflowInputs,
     };
 }
 

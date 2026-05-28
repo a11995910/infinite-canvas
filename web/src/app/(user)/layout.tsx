@@ -9,7 +9,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { AppTopNav } from "@/components/layout/app-top-nav";
 import { useUserStore } from "@/stores/use-user-store";
 
-const protectedPrefixes = ["/image", "/video", "/canvas", "/assets", "/asset-library"];
+const protectedPrefixes = ["/image", "/workflows", "/video", "/canvas", "/assets", "/asset-library"];
 
 export default function UserLayout({ children }: { children: ReactNode }) {
     const pathname = usePathname();
