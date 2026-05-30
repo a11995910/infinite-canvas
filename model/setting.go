@@ -11,6 +11,7 @@ const (
 
 // ModelChannel 模型渠道配置。
 type ModelChannel struct {
+	ID       string   `json:"id"`
 	Protocol string   `json:"protocol"`
 	Name     string   `json:"name"`
 	BaseURL  string   `json:"baseUrl"`
@@ -42,6 +43,7 @@ type PublicModelChannelSetting struct {
 }
 
 type PublicModelChannelInfo struct {
+	ID      string   `json:"id"`
 	Name    string   `json:"name"`
 	BaseURL string   `json:"baseUrl"`
 	Models  []string `json:"models"`
@@ -55,6 +57,12 @@ type PublicModelChannelInfo struct {
 type PublicSetting struct {
 	ModelChannel PublicModelChannelSetting `json:"modelChannel"`
 	Auth         PublicAuthSetting         `json:"auth"`
+	Storage      PublicStorageSetting      `json:"storage"`
+}
+
+type PublicStorageSetting struct {
+	Mode              string `json:"mode"`
+	AllowUserProvider bool   `json:"allowUserProvider"`
 }
 
 type PublicAuthSetting struct {
@@ -68,9 +76,43 @@ type PublicLinuxDoAuthSetting struct {
 
 // PrivateSetting 私有配置。
 type PrivateSetting struct {
-	Channels   []ModelChannel     `json:"channels"`
-	PromptSync PromptSyncSetting  `json:"promptSync"`
-	Auth       PrivateAuthSetting `json:"auth"`
+	Channels   []ModelChannel        `json:"channels"`
+	PromptSync PromptSyncSetting     `json:"promptSync"`
+	Auth       PrivateAuthSetting    `json:"auth"`
+	Storage    PrivateStorageSetting `json:"storage"`
+}
+
+type PrivateStorageSetting struct {
+	Mode               string                      `json:"mode"`
+	AllowUserProvider  bool                        `json:"allowUserProvider"`
+	Providers          []StorageProvider           `json:"providers"`
+	RoundRobinCursor   int                         `json:"roundRobinCursor"`
+	CapacityCheck      StorageCapacityCheckSetting `json:"capacityCheck"`
+	CapacityLimitBytes int64                       `json:"capacityLimitBytes"`
+}
+
+type StorageProvider struct {
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Type              string `json:"type"`
+	Endpoint          string `json:"endpoint"`
+	Region            string `json:"region"`
+	Bucket            string `json:"bucket"`
+	AccessKeyID       string `json:"accessKeyId"`
+	SecretAccessKey   string `json:"secretAccessKey"`
+	PublicBaseURL     string `json:"publicBaseUrl"`
+	PathPrefix        string `json:"pathPrefix"`
+	Weight            int    `json:"weight"`
+	Enabled           bool   `json:"enabled"`
+	OwnerUserID       string `json:"ownerUserId"`
+	CapacityBytes     int64  `json:"capacityBytes"`
+	CapacityCheckedAt string `json:"capacityCheckedAt"`
+	CapacityExceeded  bool   `json:"capacityExceeded"`
+}
+
+type StorageCapacityCheckSetting struct {
+	Enabled *bool  `json:"enabled"`
+	Cron    string `json:"cron"`
 }
 
 // PromptSyncSetting 提示词定时同步配置。

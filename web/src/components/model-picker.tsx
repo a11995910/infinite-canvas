@@ -5,28 +5,35 @@ import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { AiConfig } from "@/stores/use-config-store";
+import { normalizeLocalChannels, type AiConfig } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
     value?: string;
-    onChange: (model: string) => void;
+    channelId?: string;
+    onChange: (model: string, channelId?: string) => void;
     className?: string;
     fullWidth?: boolean;
     placeholder?: string;
     onMissingConfig?: () => void;
 };
 
-export function ModelPicker({ config, value, onChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
+export function ModelPicker({ config, value, channelId, onChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
-    const options = useMemo(() => Array.from(new Set([...(config.channelMode === "local" ? [value] : []), ...config.models].filter((item): item is string => Boolean(item)))), [config.channelMode, config.models, value]);
-    const channelCounts = useMemo(() => {
-        const counts = new Map<string, number>();
-        config.publicChannels?.forEach((channel) => channel.models.forEach((model) => counts.set(model, (counts.get(model) || 0) + 1)));
-        return counts;
-    }, [config.publicChannels]);
+    const channelOptions = useMemo(() => {
+        const channels =
+            config.channelMode === "remote"
+                ? config.publicChannels.map((channel) => ({ id: channel.id, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models }))
+                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models }));
+        return channels.flatMap((channel) => channel.models.map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, model })));
+    }, [config]);
+    const options = useMemo(() => {
+        const existing = value && !channelOptions.some((item) => item.model === value && (!channelId || item.channelId === channelId)) ? [{ key: `${channelId || "__current__"}::${value}`, channelId: channelId || "", channelName: "当前", model: value }] : [];
+        return [...existing, ...channelOptions];
+    }, [channelId, channelOptions, value]);
     const current = value || "";
+    const currentValue = `${channelId || options.find((item) => item.model === current)?.channelId || ""}::${current}`;
 
     useEffect(() => {
         const closeOtherPicker = (event: Event) => {
@@ -39,7 +46,7 @@ export function ModelPicker({ config, value, onChange, className, fullWidth = fa
     return (
         <Select
             open={open}
-            value={current}
+            value={current ? currentValue : ""}
             onOpenChange={(nextOpen) => {
                 if (nextOpen && !options.length && config.channelMode === "local") {
                     onMissingConfig?.();
@@ -48,7 +55,10 @@ export function ModelPicker({ config, value, onChange, className, fullWidth = fa
                 if (nextOpen) window.dispatchEvent(new CustomEvent("model-picker-open", { detail: pickerId }));
                 setOpen(nextOpen);
             }}
-            onValueChange={onChange}
+            onValueChange={(nextValue) => {
+                const option = options.find((item) => item.key === nextValue);
+                if (option) onChange(option.model, option.channelId);
+            }}
         >
             <SelectTrigger
                 className={cn(
@@ -75,9 +85,9 @@ export function ModelPicker({ config, value, onChange, className, fullWidth = fa
                 onMouseDown={(event) => event.stopPropagation()}
             >
                 {options.length ? (
-                    options.map((model) => (
-                        <SelectItem key={model} value={model} textValue={model}>
-                            <ModelLabel model={model} channelCount={channelCounts.get(model)} />
+                    options.map((option) => (
+                        <SelectItem key={option.key} value={option.key} textValue={`${option.model} ${option.channelName}`}>
+                            <ModelLabel model={option.model} channelName={option.channelName} />
                         </SelectItem>
                     ))
                 ) : (
@@ -90,12 +100,12 @@ export function ModelPicker({ config, value, onChange, className, fullWidth = fa
     );
 }
 
-function ModelLabel({ model, channelCount }: { model: string; channelCount?: number }) {
+function ModelLabel({ model, channelName }: { model: string; channelName?: string }) {
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
             <span className="truncate">{model}</span>
-            {channelCount ? <span className="ml-auto shrink-0 text-xs opacity-50">{channelCount} 渠道</span> : null}
+            {channelName ? <span className="ml-auto max-w-24 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
         </span>
     );
 }

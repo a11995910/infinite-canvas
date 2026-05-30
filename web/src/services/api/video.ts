@@ -2,7 +2,7 @@ import axios from "axios";
 
 import { dataUrlToFile } from "@/lib/image-utils";
 import { imageToDataUrl } from "@/services/image-storage";
-import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 
@@ -11,13 +11,15 @@ type ApiVideoEnvelope = { code: number; data?: VideoResponse | null; msg?: strin
 type ApiVideoResponse = VideoResponse | ApiVideoEnvelope;
 
 function aiApiUrl(config: AiConfig, path: string) {
-    return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
+    if (config.channelMode === "remote") return `/api/v1${path}`;
+    const channel = localChannelForActiveModel(config);
+    return buildApiUrl(channel?.baseUrl || config.baseUrl, path);
 }
 
 function aiHeaders(config: AiConfig) {
     const token = useUserStore.getState().token;
     if (config.channelMode === "remote" && !token) throw new Error("请先登录后再使用云端渠道");
-    return config.channelMode === "remote" ? { Authorization: `Bearer ${token}` } : { Authorization: `Bearer ${config.apiKey}` };
+    return config.channelMode === "remote" ? { Authorization: `Bearer ${token}`, ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}) } : { Authorization: `Bearer ${localChannelForActiveModel(config)?.apiKey || config.apiKey}` };
 }
 
 function refreshRemoteUser(config: AiConfig) {

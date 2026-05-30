@@ -1,8 +1,30 @@
 "use client";
 
-import { AlertCircle, BookOpen, CheckSquare, ChevronDown, ChevronUp, ClipboardPaste, Copy, Download, FolderPlus, History, ImagePlus, LoaderCircle, PanelBottom, PanelLeft, PenLine, Plus, RotateCcw, Sparkles, Trash2, Upload } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { App, Button, Checkbox, Empty, Image, Input, Modal, Tag, Typography } from "antd";
+import {
+    AlertCircle,
+    BookOpen,
+    CheckSquare,
+    ChevronDown,
+    ChevronUp,
+    ClipboardPaste,
+    Copy,
+    Download,
+    FolderPlus,
+    History,
+    ImagePlus,
+    LoaderCircle,
+    PanelBottom,
+    PanelLeft,
+    PenLine,
+    Plus,
+    RotateCcw,
+    Sparkles,
+    Trash2,
+    Upload,
+    WandSparkles,
+} from "lucide-react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 
@@ -11,13 +33,21 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
+import {
+    CreativeWorkflowWorkspace,
+    type WorkflowExternalTaskFailure,
+    type WorkflowExternalTaskStart,
+    type WorkflowExternalTaskSuccess,
+} from "@/components/workflows/creative-workflow-workspace";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
-import { requestEdit, requestGeneration } from "@/services/api/image";
-import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { ImageRequestError, requestEdit, requestGeneration } from "@/services/api/image";
+import { fetchUserConfig, syncUserImageHistory } from "@/services/api/user-config";
+import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 
 type GeneratedImage = {
@@ -41,7 +71,12 @@ type GenerationResult = {
     references: ReferenceImage[];
     image?: GeneratedImage;
     error?: string;
+    errorDetail?: string;
     durationMs?: number;
+    workflowId?: string;
+    workflowName?: string;
+    workflowInputs?: Record<string, unknown>;
+    workflowTaskId?: string;
 };
 
 type GenerationLog = {
@@ -63,6 +98,7 @@ type GenerationLog = {
     images: GeneratedImage[];
     thumbnails: string[];
     errors: string[];
+    errorDetails?: string[];
     categoryIds: string[];
     workflowId?: string;
     workflowName?: string;
@@ -83,6 +119,7 @@ const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
 const CATEGORY_STORE_KEY = "infinite-canvas:image_generation_categories";
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:image-workbench-layout";
 const RESULT_VIEW_MODE_KEY = "infinite-canvas:image-result-view-mode";
+const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
 const defaultCollapsedSections: CollapsedSections = { prompt: false, references: true, settings: true };
@@ -96,6 +133,8 @@ export default function ImagePage() {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const token = useUserStore((state) => state.token);
+    const isUserReady = useUserStore((state) => state.isReady);
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
@@ -107,10 +146,14 @@ export default function ImagePage() {
     const [collapsedSections, setCollapsedSections] = useState<CollapsedSections>(defaultCollapsedSections);
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
+    const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
     const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [now, setNow] = useState(Date.now());
+    const [workflowButtonPosition, setWorkflowButtonPosition] = useState({ x: 0, y: 0 });
+    const workflowButtonDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
+    const accountHistorySyncEnabledRef = useRef(false);
 
     const model = effectiveConfig.imageModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
@@ -125,10 +168,19 @@ export default function ImagePage() {
             if (storedLayout === "side" || storedLayout === "bottom") setWorkbenchLayoutState(storedLayout);
             const storedViewMode = window.localStorage?.getItem(RESULT_VIEW_MODE_KEY);
             if (storedViewMode === "all" || storedViewMode === "category") setResultViewModeState(storedViewMode);
+            const storedButtonPosition = JSON.parse(window.localStorage?.getItem(WORKFLOW_BUTTON_POSITION_KEY) || "null") as { x?: number; y?: number } | null;
+            if (typeof storedButtonPosition?.x === "number" && typeof storedButtonPosition?.y === "number") setWorkflowButtonPosition(clampWorkflowButtonPosition(storedButtonPosition));
+            else setWorkflowButtonPosition(defaultWorkflowButtonPosition());
         } catch {
             // Local storage can be unavailable in restricted browser contexts.
+            setWorkflowButtonPosition(defaultWorkflowButtonPosition());
         }
     }, []);
+
+    useEffect(() => {
+        if (!isUserReady || !token) return;
+        void loadAccountImageHistory(token);
+    }, [isUserReady, token]);
 
     useEffect(() => {
         if (!pendingCount) return;
@@ -154,6 +206,38 @@ export default function ImagePage() {
         }
     };
 
+    const persistWorkflowButtonPosition = (position: { x: number; y: number }) => {
+        const nextPosition = clampWorkflowButtonPosition(position);
+        setWorkflowButtonPosition(nextPosition);
+        try {
+            window.localStorage?.setItem(WORKFLOW_BUTTON_POSITION_KEY, JSON.stringify(nextPosition));
+        } catch {
+            // Keep the drag position in memory when localStorage is unavailable.
+        }
+    };
+
+    const handleWorkflowButtonPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        const origin = workflowButtonPosition.x || workflowButtonPosition.y ? workflowButtonPosition : defaultWorkflowButtonPosition();
+        workflowButtonDragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: origin.x, originY: origin.y, moved: false };
+    };
+
+    const handleWorkflowButtonPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
+        const drag = workflowButtonDragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        const dx = event.clientX - drag.startX;
+        const dy = event.clientY - drag.startY;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) drag.moved = true;
+        setWorkflowButtonPosition(clampWorkflowButtonPosition({ x: drag.originX + dx, y: drag.originY + dy }));
+    };
+
+    const handleWorkflowButtonPointerUp = (event: ReactPointerEvent<HTMLButtonElement>) => {
+        const drag = workflowButtonDragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        event.currentTarget.releasePointerCapture(event.pointerId);
+        persistWorkflowButtonPosition({ x: drag.originX + event.clientX - drag.startX, y: drag.originY + event.clientY - drag.startY });
+    };
+
     const toggleCollapsedSection = (section: CollapsibleSectionKey) => {
         setCollapsedSections((value) => ({ ...value, [section]: !value[section] }));
     };
@@ -163,7 +247,7 @@ export default function ImagePage() {
         const nextReferences = await Promise.all(
             imageFiles.map(async (file) => {
                 const image = await uploadImage(file);
-                return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
+                return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey, source: "upload" as const, temporary: true };
             }),
         );
         setReferences((value) => [...value, ...nextReferences]);
@@ -180,13 +264,29 @@ export default function ImagePage() {
             const nextReferences = await Promise.all(
                 blobs.map(async (blob, index) => {
                     const image = await uploadImage(blob);
-                    return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
+                    return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey, source: "clipboard" as const, temporary: true };
                 }),
             );
             setReferences((value) => [...value, ...nextReferences]);
             message.success(`已读取 ${nextReferences.length} 张参考图`);
         } catch {
             message.error("剪切板里没有可读取的图片");
+        }
+    };
+
+    const removeReference = async (id: string) => {
+        const reference = references.find((item) => item.id === id);
+        setReferences((value) => value.filter((ref) => ref.id !== id));
+        if (!reference || !shouldDeleteReferenceFile(reference, logs, results)) {
+            message.success("已从工作台移除参考图");
+            return;
+        }
+        if (reference?.storageKey) {
+            try {
+                await deleteStoredImages([reference.storageKey]);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "参考图文件删除失败");
+            }
         }
     };
 
@@ -240,7 +340,8 @@ export default function ImagePage() {
         const successCount = successItems.length;
         const failCount = taskCount - successCount;
         const failed = result.find((item): item is PromiseRejectedResult => item.status === "rejected");
-        const errors = result.filter((item): item is PromiseRejectedResult => item.status === "rejected").map((item) => (item.reason instanceof Error ? item.reason.message : "生成失败"));
+        const errors = result.filter((item): item is PromiseRejectedResult => item.status === "rejected").map((item) => errorMessage(item.reason));
+        const errorDetails = result.filter((item): item is PromiseRejectedResult => item.status === "rejected").map((item) => errorDetail(item.reason));
 
         try {
             const logImages = await Promise.all(
@@ -263,6 +364,7 @@ export default function ImagePage() {
                     status: successCount ? "成功" : "失败",
                     images: logImages,
                     errors,
+                    errorDetails,
                     categoryIds: activeResultCategoryId ? [activeResultCategoryId] : [],
                 }),
             );
@@ -278,13 +380,32 @@ export default function ImagePage() {
     };
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
-        const stored = await uploadImage(image.dataUrl);
-        setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
-        message.success("已加入参考图");
+        try {
+            if (image.storageKey) {
+                const url = await resolveImageUrl(image.storageKey, image.dataUrl);
+                setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: image.mimeType || "image/png", dataUrl: url || image.dataUrl, storageKey: image.storageKey, source: "result", temporary: false }]);
+            } else {
+                const source = await imageToDataUrl(image);
+                const stored = await uploadImage(source || image.dataUrl);
+                setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, source: "result", temporary: false }]);
+            }
+            message.success("已加入参考图");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "加入参考图失败");
+        }
     };
 
     const saveResultToAssets = async (image: GeneratedImage, index: number) => {
-        const stored = await uploadImage(image.dataUrl);
+        const stored = image.storageKey
+            ? {
+                  url: await resolveImageUrl(image.storageKey, image.dataUrl),
+                  storageKey: image.storageKey,
+                  width: image.width,
+                  height: image.height,
+                  bytes: image.bytes,
+                  mimeType: image.mimeType || "image/png",
+              }
+            : await uploadImage(await imageToDataUrl(image));
         addAsset({
             kind: "image",
             title: `生成结果 ${index + 1}`,
@@ -301,8 +422,25 @@ export default function ImagePage() {
         if (payload.kind === "text") {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
-            const stored = await uploadImage(payload.dataUrl);
-            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
+            const reference =
+                payload.storageKey || payload.source === "asset"
+                    ? {
+                          id: nanoid(),
+                          name: payload.title,
+                          type: payload.mimeType || "image/png",
+                          dataUrl: payload.dataUrl,
+                          storageKey: payload.storageKey,
+                          source: "asset" as const,
+                          assetId: payload.assetId,
+                          temporary: false,
+                      }
+                    : (() => null)();
+            if (reference) {
+                setReferences((value) => [...value, reference]);
+            } else {
+                const stored = await uploadImage(payload.dataUrl);
+                setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, source: payload.source === "library" ? "library" : "upload", temporary: payload.source !== "library" }]);
+            }
         } else {
             message.warning("视频素材不能作为生图参考图");
         }
@@ -318,8 +456,15 @@ export default function ImagePage() {
     };
 
     const deleteSelectedLogs = () => {
-        const imageKeys = logs.filter((log) => selectedLogIds.includes(log.id)).flatMap((log) => log.images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)));
-        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(refreshLogs);
+        const deletedLogs = logs.filter((log) => selectedLogIds.includes(log.id));
+        const nextLogs = logs.filter((log) => !selectedLogIds.includes(log.id));
+        const imageKeys = disposableLogStorageKeys(deletedLogs, nextLogs);
+        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(async () => {
+            setLogs(nextLogs);
+            setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
+            await persistImageHistory(nextLogs, categories);
+            await refreshLogs();
+        });
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults((value) => value.filter((item) => item.status === "pending"));
@@ -336,8 +481,12 @@ export default function ImagePage() {
             cancelText: "取消",
             okButtonProps: { danger: true },
             onOk: async () => {
-                const imageKeys = log.images.map((image) => image.storageKey).filter((key): key is string => Boolean(key));
+                const nextLogs = logs.filter((item) => item.id !== log.id);
+                const imageKeys = disposableLogStorageKeys([log], nextLogs);
                 await Promise.all([deleteStoredImages(imageKeys), logStore.removeItem(log.id)]);
+                setLogs(nextLogs);
+                setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
+                await persistImageHistory(nextLogs, categories);
                 setSelectedLogIds((value) => value.filter((id) => id !== log.id));
                 if (previewLog?.id === log.id) setPreviewLog(null);
                 await refreshLogs();
@@ -346,13 +495,51 @@ export default function ImagePage() {
     };
 
     const saveLog = async (log: GenerationLog) => {
-        setLogs((value) => [log, ...value.filter((item) => item.id !== log.id)]);
+        const storedLogs = await readStoredLogs();
+        const nextLogs = [log, ...storedLogs.filter((item) => item.id !== log.id)];
+        setLogs(nextLogs);
         await logStore.setItem(log.id, serializeLog(log));
+        await persistImageHistory(nextLogs, categories);
         await refreshLogs();
     };
 
     const refreshLogs = async () => setLogs(await readStoredLogs());
     const refreshCategories = async () => setCategories(await readStoredCategories());
+
+    const loadAccountImageHistory = async (currentToken: string) => {
+        try {
+            const config = await fetchUserConfig(currentToken);
+            accountHistorySyncEnabledRef.current = config.syncCapabilities?.userData === true;
+            const remote = config.imageHistory as { logs?: GenerationLog[]; categories?: GenerationCategory[] } | undefined;
+            const remoteLogs = Array.isArray(remote?.logs) ? remote.logs : [];
+            const remoteCategories = Array.isArray(remote?.categories) ? remote.categories : [];
+            if (remoteLogs.length || remoteCategories.length) {
+                const localLogs = await readStoredLogs();
+                const localCategories = await readStoredCategories();
+                const mergedLogs = await mergeGenerationLogs(remoteLogs, localLogs);
+                const mergedCategories = mergeGenerationCategories(remoteCategories, localCategories);
+                await replaceStoredImageHistory(mergedLogs, mergedCategories);
+                setLogs(mergedLogs);
+                setCategories(mergedCategories);
+                if (accountHistorySyncEnabledRef.current && (mergedLogs.length !== remoteLogs.length || mergedCategories.length !== remoteCategories.length || remoteLogs.some(hasInlineImageData))) {
+                    await syncUserImageHistory(currentToken, imageHistorySnapshot(mergedLogs, mergedCategories));
+                }
+                return;
+            }
+            const localLogs = await readStoredLogs();
+            const localCategories = await readStoredCategories();
+            if (accountHistorySyncEnabledRef.current && (localLogs.length || localCategories.length)) await syncUserImageHistory(currentToken, imageHistorySnapshot(localLogs, localCategories));
+        } catch {
+            // Keep local history available when account sync fails.
+        }
+    };
+
+    const persistImageHistory = async (nextLogs: GenerationLog[], nextCategories: GenerationCategory[]) => {
+        if (!token || !accountHistorySyncEnabledRef.current) return;
+        await syncUserImageHistory(token, imageHistorySnapshot(nextLogs, nextCategories)).catch(() => {
+            accountHistorySyncEnabledRef.current = false;
+        });
+    };
 
     const createCategory = async (name: string) => {
         const trimmedName = name.trim();
@@ -366,6 +553,7 @@ export default function ImagePage() {
         const nextCategories = [...categories, nextCategory];
         setCategories(nextCategories);
         await categoryStore.setItem(CATEGORY_STORE_KEY, nextCategories);
+        await persistImageHistory(logs, nextCategories);
         return nextCategory;
     };
 
@@ -378,6 +566,7 @@ export default function ImagePage() {
         const nextCategories = categories.map((item) => (item.id === category.id ? { ...item, name: trimmedName } : item));
         setCategories(nextCategories);
         await categoryStore.setItem(CATEGORY_STORE_KEY, nextCategories);
+        await persistImageHistory(logs, nextCategories);
         message.success("已重命名分类");
     };
 
@@ -395,6 +584,7 @@ export default function ImagePage() {
                 setLogs(nextLogs);
                 await categoryStore.setItem(CATEGORY_STORE_KEY, nextCategories);
                 await Promise.all(nextLogs.map((log) => logStore.setItem(log.id, serializeLog(log))));
+                await persistImageHistory(nextLogs, nextCategories);
                 message.success("已删除分类");
             },
         });
@@ -402,8 +592,10 @@ export default function ImagePage() {
 
     const updateLogCategories = async (log: GenerationLog, categoryIds: string[]) => {
         const nextLog = { ...log, categoryIds };
-        setLogs((value) => value.map((item) => (item.id === log.id ? nextLog : item)));
+        const nextLogs = logs.map((item) => (item.id === log.id ? nextLog : item));
+        setLogs(nextLogs);
         await logStore.setItem(log.id, serializeLog(nextLog));
+        await persistImageHistory(nextLogs, categories);
         await refreshLogs();
         message.success(categoryIds.length ? "已更新分类" : "已移至未分类");
     };
@@ -451,7 +643,7 @@ export default function ImagePage() {
         }
         return {
             text,
-            requestConfig: { ...effectiveConfig, model, count: "1" },
+            requestConfig: { ...effectiveConfig, model, activeChannelId: effectiveConfig.imageChannelId, count: "1" },
             displayConfig: buildGenerationLogConfig({ ...effectiveConfig, model, count: String(taskCount) }),
             references: [...referenceItems],
         };
@@ -468,7 +660,7 @@ export default function ImagePage() {
             setResults((value) => updateResult(value, resultId, { status: "success", image: nextImage, durationMs: nextImage.durationMs }));
             return nextImage;
         } catch (error) {
-            setResults((value) => updateResult(value, resultId, { status: "failed", error: error instanceof Error ? error.message : "生成失败", durationMs: performance.now() - itemStartedAt }));
+            setResults((value) => updateResult(value, resultId, { status: "failed", error: errorMessage(error), errorDetail: errorDetail(error), durationMs: performance.now() - itemStartedAt }));
             throw error;
         }
     };
@@ -478,6 +670,93 @@ export default function ImagePage() {
         if (!snapshot) return;
         setResults((value) => value.filter((item) => item.id !== result.id));
         void submitGenerationBatch(snapshot);
+    };
+
+    const handleWorkflowTaskStarted = (task: WorkflowExternalTaskStart) => {
+        const configSnapshot = buildGenerationLogConfig({
+            ...effectiveConfig,
+            ...task.config,
+            model: task.model,
+            imageModel: task.model,
+            apiMode: task.apiMode,
+            count: String(task.count),
+        });
+        const pendingItems: GenerationResult[] = Array.from({ length: task.count }, (_, index) => ({
+            id: createWorkflowResultId(task.taskId, index),
+            status: "pending",
+            createdAt: task.startedAt,
+            prompt: task.prompt,
+            model: task.model,
+            config: configSnapshot,
+            references: task.references || [],
+            workflowId: task.workflowId,
+            workflowName: task.workflowName,
+            workflowInputs: task.inputs,
+            workflowTaskId: task.taskId,
+        }));
+        setResultViewMode("all");
+        setActiveResultCategoryId(null);
+        setResults((value) => [...pendingItems, ...value]);
+        setNow(Date.now());
+    };
+
+    const handleWorkflowTaskSuccess = (task: WorkflowExternalTaskSuccess) => {
+        setResults((value) => {
+            const next = [...value];
+            task.images.forEach((image, index) => {
+                const resultId = createWorkflowResultId(task.taskId, index);
+                const existingIndex = next.findIndex((item) => item.id === resultId);
+                const nextImage: GeneratedImage = {
+                    id: image.id,
+                    dataUrl: image.imageUrl,
+                    storageKey: image.storageKey,
+                    durationMs: image.durationMs || task.durationMs,
+                    width: image.width,
+                    height: image.height,
+                    bytes: image.bytes,
+                    mimeType: image.mimeType,
+                };
+                if (existingIndex >= 0) {
+                    next[existingIndex] = { ...next[existingIndex], status: "success", image: nextImage, durationMs: task.durationMs };
+                } else {
+                    next.unshift({
+                        id: resultId,
+                        status: "success",
+                        createdAt: task.endedAt,
+                        prompt: image.prompt,
+                        model: effectiveConfig.imageModel || effectiveConfig.model,
+                        config: buildGenerationLogConfig(effectiveConfig),
+                        references: [],
+                        image: nextImage,
+                        durationMs: task.durationMs,
+                        workflowId: image.workflowId,
+                        workflowName: image.workflowName,
+                        workflowTaskId: task.taskId,
+                    });
+                }
+            });
+            return next;
+        });
+        setResultViewMode("all");
+        setActiveResultCategoryId(null);
+        void refreshLogs().then(() => {
+            setResults((value) => value.filter((item) => item.workflowTaskId !== task.taskId));
+        });
+    };
+
+    const handleWorkflowTaskFailure = (task: WorkflowExternalTaskFailure) => {
+        setResults((value) =>
+            value.map((item) =>
+                item.workflowTaskId === task.taskId
+                    ? {
+                          ...item,
+                          status: "failed",
+                          error: task.error,
+                          durationMs: task.durationMs,
+                      }
+                    : item,
+            ),
+        );
     };
 
     return (
@@ -506,7 +785,7 @@ export default function ImagePage() {
                             onClearPrompt={clearPrompt}
                             onPasteReferences={() => void addReferencesFromClipboard()}
                             onUploadReferences={() => fileInputRef.current?.click()}
-                            onRemoveReference={(id) => setReferences((value) => value.filter((ref) => ref.id !== id))}
+                            onRemoveReference={(id) => void removeReference(id)}
                             onGenerate={() => void generate()}
                         />
                         <ResultsPanel
@@ -592,12 +871,49 @@ export default function ImagePage() {
                             onClearPrompt={clearPrompt}
                             onPasteReferences={() => void addReferencesFromClipboard()}
                             onUploadReferences={() => fileInputRef.current?.click()}
-                            onRemoveReference={(id) => setReferences((value) => value.filter((ref) => ref.id !== id))}
+                            onRemoveReference={(id) => void removeReference(id)}
                             onGenerate={() => void generate()}
                         />
                     </>
                 )}
             </main>
+            <button
+                type="button"
+                className="fixed z-30 inline-flex touch-none select-none items-center gap-2 rounded-full border border-stone-200 bg-white/85 px-4 py-3 text-sm font-medium text-stone-900 shadow-2xl shadow-stone-900/10 backdrop-blur-xl transition hover:bg-white dark:border-stone-800 dark:bg-stone-900/80 dark:text-stone-100 dark:hover:bg-stone-900"
+                style={{ left: workflowButtonPosition.x || defaultWorkflowButtonPosition().x, top: workflowButtonPosition.y || defaultWorkflowButtonPosition().y }}
+                onPointerDown={handleWorkflowButtonPointerDown}
+                onPointerMove={handleWorkflowButtonPointerMove}
+                onPointerUp={handleWorkflowButtonPointerUp}
+                onClick={() => {
+                    if (workflowButtonDragRef.current?.moved) {
+                        workflowButtonDragRef.current = null;
+                        return;
+                    }
+                    workflowButtonDragRef.current = null;
+                    setWorkflowDrawerOpen(true);
+                }}
+            >
+                <WandSparkles className="size-4" />
+                工作流
+            </button>
+            <Drawer title="创作工作流" placement="right" size="min(1120px, 92vw)" open={workflowDrawerOpen} onClose={() => setWorkflowDrawerOpen(false)} styles={{ body: { padding: 0 } }} destroyOnHidden={false}>
+                <CreativeWorkflowWorkspace
+                    embedded
+                    hideTaskList
+                    onWorkflowTaskStarted={handleWorkflowTaskStarted}
+                    onWorkflowTaskSuccess={handleWorkflowTaskSuccess}
+                    onWorkflowTaskFailure={handleWorkflowTaskFailure}
+                    onGenerationLogSaved={() => {
+                        void (async () => {
+                            const nextCategories = await readStoredCategories();
+                            const nextLogs = await readStoredLogs();
+                            setCategories(nextCategories);
+                            setLogs(nextLogs);
+                            await persistImageHistory(nextLogs, nextCategories);
+                        })();
+                    }}
+                />
+            </Drawer>
             <input
                 ref={fileInputRef}
                 type="file"
@@ -1215,6 +1531,7 @@ function ResultImageCard({
                 <Tag className="absolute right-1.5 top-1.5 z-10 m-0 text-[10px]" color="blue">
                     新生成
                 </Tag>
+                <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
                 <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
             </div>
             <TaskInfo result={result} onCopyPrompt={onCopyPrompt} />
@@ -1259,9 +1576,12 @@ function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationRes
 }
 
 function FailedImageCard({ result, error, onCopyPrompt, onRetry }: { result: GenerationResult; error: string; onCopyPrompt: (text: string) => void | Promise<void>; onRetry: () => void }) {
+    const [detailOpen, setDetailOpen] = useState(false);
+    const detail = result.errorDetail || error;
     return (
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
-            <div className="flex aspect-[4/3] flex-col items-center justify-center gap-3 p-5 text-center">
+            <div className="relative flex aspect-[4/3] flex-col items-center justify-center gap-3 p-5 text-center">
+                <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
                 <AlertCircle className="size-7 text-red-500" />
                 <div className="text-sm font-medium text-red-600 dark:text-red-300">生成失败</div>
                 <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
@@ -1269,11 +1589,17 @@ function FailedImageCard({ result, error, onCopyPrompt, onRetry }: { result: Gen
                 </Typography.Paragraph>
             </div>
             <TaskInfo result={result} error={error} onCopyPrompt={onCopyPrompt} />
-            <div className="flex justify-end border-t border-red-200 p-3 dark:border-red-950">
+            <div className="flex justify-end gap-2 border-t border-red-200 p-3 dark:border-red-950">
+                <Button size="small" onClick={() => setDetailOpen(true)}>
+                    详情
+                </Button>
                 <Button size="small" danger onClick={onRetry}>
                     重试
                 </Button>
             </div>
+            <Modal title="失败详情" open={detailOpen} width={760} onCancel={() => setDetailOpen(false)} footer={null}>
+                <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md bg-stone-950 p-3 text-xs text-stone-100">{detail}</pre>
+            </Modal>
         </div>
     );
 }
@@ -1295,6 +1621,11 @@ function TaskInfo({ result, error, onCopyPrompt }: { result: GenerationResult; e
                 </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
+                {result.workflowName ? (
+                    <Tag className="m-0" color="cyan">
+                        工作流 {result.workflowName}
+                    </Tag>
+                ) : null}
                 <Tag className="m-0">{formatLogTime(result.createdAt)}</Tag>
                 <Tag className="m-0">{result.model}</Tag>
                 <Tag className="m-0">{result.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
@@ -1347,10 +1678,12 @@ function HistoryLogCard({
     onDownload: (image: GeneratedImage, index: number) => void;
     onSaveAsset: (image: GeneratedImage, index: number) => void;
 }) {
-    const firstImage = log.images[0];
+    const displayImages = log.images.filter((image) => Boolean(image.dataUrl));
+    const firstImage = displayImages[0];
     const [expanded, setExpanded] = useState(false);
     const [categoryOpen, setCategoryOpen] = useState(false);
     const [categoryName, setCategoryName] = useState("");
+    const [detailOpen, setDetailOpen] = useState(false);
     const categoryMenuRef = useRef<HTMLDivElement>(null);
     const logCategories = categories.filter((category) => log.categoryIds.includes(category.id));
     const createCategory = async () => {
@@ -1395,13 +1728,14 @@ function HistoryLogCard({
                         <span>{log.errors[0] || "没有可显示的图片"}</span>
                     </div>
                 )}
-                {log.images.length > 1 ? (
+                {displayImages.length > 1 ? (
                     <div className="absolute bottom-1.5 left-1.5 right-1.5 flex gap-1 overflow-hidden">
-                        {log.images.slice(0, 4).map((image) => (
+                        {displayImages.slice(0, 4).map((image) => (
                             <img key={image.id} src={image.dataUrl} alt="" className="size-8 shrink-0 rounded border border-white/80 object-cover shadow-sm dark:border-stone-900/80" />
                         ))}
                     </div>
                 ) : null}
+                <ReferenceThumbnailOverlay references={log.references} className="bottom-1.5 right-1.5" />
             </div>
             <div className="space-y-2 border-t border-stone-200 p-2.5 text-xs dark:border-stone-800">
                 <div className={`${expanded ? "" : "line-clamp-2"} whitespace-pre-wrap text-stone-700 dark:text-stone-200`}>{log.prompt}</div>
@@ -1440,7 +1774,14 @@ function HistoryLogCard({
                     <Tag className="m-0 text-[10px]">超时 {log.config.timeout || "600"}s</Tag>
                     <Tag className="m-0 text-[10px]">{formatDuration(log.durationMs)}</Tag>
                 </div>
-                {log.errors[0] ? <div className="line-clamp-2 rounded-md bg-red-100 px-2 py-1 text-red-600 dark:bg-red-950/40 dark:text-red-300">{log.errors[0]}</div> : null}
+                {log.errors[0] ? (
+                    <div className="flex items-start justify-between gap-2 rounded-md bg-red-100 px-2 py-1 text-red-600 dark:bg-red-950/40 dark:text-red-300">
+                        <span className="line-clamp-2 min-w-0">{log.errors[0]}</span>
+                        <Button size="small" type="text" className="!h-auto !p-0 text-xs" onClick={() => setDetailOpen(true)}>
+                            详情
+                        </Button>
+                    </div>
+                ) : null}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
                 <div ref={categoryMenuRef} className="relative flex flex-wrap gap-1">
@@ -1482,6 +1823,22 @@ function HistoryLogCard({
                     </div>
                 ) : null}
             </div>
+            <Modal title="失败详情" open={detailOpen} width={760} onCancel={() => setDetailOpen(false)} footer={null}>
+                <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md bg-stone-950 p-3 text-xs text-stone-100">{log.errorDetails?.[0] || log.errors[0] || "没有详情"}</pre>
+            </Modal>
+        </div>
+    );
+}
+
+function ReferenceThumbnailOverlay({ references, className = "" }: { references?: ReferenceImage[]; className?: string }) {
+    const visibleReferences = (references || []).filter((item) => Boolean(item.dataUrl)).slice(0, 3);
+    if (!visibleReferences.length) return null;
+    return (
+        <div className={`absolute z-10 flex items-center gap-1 rounded-md bg-black/55 p-1 shadow-sm backdrop-blur ${className}`}>
+            {visibleReferences.map((item) => (
+                <img key={item.id} src={item.dataUrl} alt={item.name} className="size-7 rounded border border-white/60 object-cover" />
+            ))}
+            {(references || []).length > visibleReferences.length ? <span className="px-1 text-[10px] text-white">+{(references || []).length - visibleReferences.length}</span> : null}
         </div>
     );
 }
@@ -1498,8 +1855,51 @@ function createPendingResult(id: string, snapshot: RequestSnapshot): GenerationR
     };
 }
 
+function generationLogStorageKeys(log: GenerationLog) {
+    return [...log.images.map((image) => image.storageKey), ...log.references.filter(isDisposableReferenceFile).map((image) => image.storageKey)].filter((key): key is string => Boolean(key));
+}
+
+function referenceUsedByGeneration(reference: ReferenceImage, logs: GenerationLog[], results: GenerationResult[]) {
+    if (!reference.storageKey) return false;
+    return logs.some((log) => log.references.some((item) => item.storageKey === reference.storageKey)) || results.some((result) => result.references.some((item) => item.storageKey === reference.storageKey));
+}
+
+function shouldDeleteReferenceFile(reference: ReferenceImage, logs: GenerationLog[], results: GenerationResult[]) {
+    if (!reference.storageKey) return false;
+    if (!isDisposableReferenceFile(reference)) return false;
+    return !referenceUsedByGeneration(reference, logs, results);
+}
+
+function isDisposableReferenceFile(reference: ReferenceImage) {
+    return reference.temporary === true || reference.source === "upload" || reference.source === "clipboard";
+}
+
+function disposableLogStorageKeys(deletedLogs: GenerationLog[], remainingLogs: GenerationLog[]) {
+    const deletedKeys = new Set(deletedLogs.flatMap(generationLogStorageKeys));
+    const retainedKeys = new Set(remainingLogs.flatMap(generationLogStorageKeys));
+    return [...deletedKeys].filter((key) => !retainedKeys.has(key));
+}
+
+function createWorkflowResultId(taskId: string, index: number) {
+    return `${taskId}:${index}`;
+}
+
 function updateResult(results: GenerationResult[], id: string, next: Partial<GenerationResult>) {
     return results.map((item) => (item.id === id ? { ...item, ...next } : item));
+}
+
+function errorMessage(error: unknown) {
+    return error instanceof Error ? error.message : "生成失败";
+}
+
+function errorDetail(error: unknown) {
+    if (error instanceof ImageRequestError && error.detail) return error.detail;
+    if (error instanceof Error) return error.stack || error.message;
+    try {
+        return JSON.stringify(error, null, 2);
+    } catch {
+        return String(error || "生成失败");
+    }
 }
 
 async function readStoredLogs() {
@@ -1526,6 +1926,44 @@ async function readStoredCategories() {
     }
 }
 
+async function replaceStoredImageHistory(logs: GenerationLog[], categories: GenerationCategory[]) {
+    if (typeof window === "undefined") return;
+    await logStore.clear();
+    await Promise.all(logs.map((log) => logStore.setItem(log.id, serializeLog(log))));
+    await categoryStore.setItem(CATEGORY_STORE_KEY, categories);
+}
+
+function imageHistorySnapshot(logs: GenerationLog[], categories: GenerationCategory[]) {
+    return {
+        logs: logs.map(serializeLog),
+        categories,
+    };
+}
+
+function hasInlineImageData(log: Partial<GenerationLog>) {
+    return [...(log.images || []), ...(log.references || [])].some((item) => item.dataUrl?.startsWith("data:image/"));
+}
+
+async function mergeGenerationLogs(remoteLogs: GenerationLog[], localLogs: GenerationLog[]) {
+    const normalized = await Promise.all([...remoteLogs, ...localLogs].map(normalizeLog));
+    const byId = new Map<string, GenerationLog>();
+    for (const log of normalized) {
+        const existing = byId.get(log.id);
+        if (!existing || log.createdAt >= existing.createdAt || log.images.length + log.failCount > existing.images.length + existing.failCount) {
+            byId.set(log.id, log);
+        }
+    }
+    return [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function mergeGenerationCategories(remoteCategories: GenerationCategory[], localCategories: GenerationCategory[]) {
+    const byId = new Map<string, GenerationCategory>();
+    [...remoteCategories, ...localCategories].forEach((category) => {
+        if (category.id && category.name) byId.set(category.id, category);
+    });
+    return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
+}
+
 async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog> {
     const references = await Promise.all(
         (log.references || []).map(async (item) => ({
@@ -1534,11 +1972,12 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         })),
     );
     const images = await Promise.all(
-        (log.images || []).map(async (item) => ({
-            ...item,
-            dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl),
-        })),
+        (log.images || []).map(async (item) => {
+            const dataUrl = await resolveImageUrl(item.storageKey, item.dataUrl);
+            return { ...item, dataUrl };
+        }),
     );
+    const visibleImages = images.filter((image) => Boolean(image.dataUrl));
     const config = normalizeLogConfig(log);
     return {
         id: log.id || nanoid(),
@@ -1556,9 +1995,10 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         size: log.size || config.size || "",
         quality: log.quality || config.quality || "",
         status: log.status || "成功",
-        images,
-        thumbnails: images.map((image) => image.dataUrl),
+        images: visibleImages,
+        thumbnails: visibleImages.map((image) => image.dataUrl),
         errors: log.errors || [],
+        errorDetails: log.errorDetails || [],
         categoryIds: Array.isArray(log.categoryIds) ? log.categoryIds : [],
         workflowId: log.workflowId,
         workflowName: log.workflowName,
@@ -1569,14 +2009,16 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
 function serializeLog(log: GenerationLog): GenerationLog {
     return {
         ...log,
-        references: log.references.map((item) => ({ ...item, dataUrl: shouldPersistInlineImage(item.dataUrl) ? item.dataUrl : item.storageKey ? "" : item.dataUrl })),
-        images: log.images.map((image) => ({ ...image, dataUrl: shouldPersistInlineImage(image.dataUrl) ? image.dataUrl : image.storageKey ? "" : image.dataUrl })),
-        thumbnails: log.images.map((image) => (shouldPersistInlineImage(image.dataUrl) ? image.dataUrl : "")),
+        references: log.references.map((item) => ({ ...item, dataUrl: persistableImageUrl(item.dataUrl, item.storageKey) })),
+        images: log.images.map((image) => ({ ...image, dataUrl: persistableImageUrl(image.dataUrl, image.storageKey) })),
+        thumbnails: log.images.map((image) => persistableImageUrl(image.dataUrl, image.storageKey)),
     };
 }
 
-function shouldPersistInlineImage(dataUrl?: string) {
-    return Boolean(dataUrl?.startsWith("data:image/"));
+function persistableImageUrl(dataUrl?: string, storageKey?: string) {
+    if (storageKey) return "";
+    if (!dataUrl?.startsWith("data:image/")) return dataUrl || "";
+    return "";
 }
 
 function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
@@ -1617,6 +2059,19 @@ function buildGenerationLogConfig(config: AiConfig): GenerationLogConfig {
     };
 }
 
+function defaultWorkflowButtonPosition() {
+    if (typeof window === "undefined") return { x: 24, y: 320 };
+    return { x: Math.max(16, window.innerWidth - 132), y: Math.max(96, Math.round(window.innerHeight / 2)) };
+}
+
+function clampWorkflowButtonPosition(position: { x?: number; y?: number }) {
+    if (typeof window === "undefined") return { x: Number(position.x) || 24, y: Number(position.y) || 320 };
+    return {
+        x: Math.min(Math.max(12, Number(position.x) || 12), Math.max(12, window.innerWidth - 120)),
+        y: Math.min(Math.max(72, Number(position.y) || 72), Math.max(72, window.innerHeight - 64)),
+    };
+}
+
 function buildLog({
     prompt,
     model,
@@ -1628,6 +2083,7 @@ function buildLog({
     status,
     images,
     errors,
+    errorDetails,
     categoryIds,
 }: {
     prompt: string;
@@ -1640,6 +2096,7 @@ function buildLog({
     status: GenerationLog["status"];
     images: GeneratedImage[];
     errors: string[];
+    errorDetails?: string[];
     categoryIds?: string[];
 }): GenerationLog {
     const logConfig = config;
@@ -1662,6 +2119,7 @@ function buildLog({
         images,
         thumbnails: images.map((image) => image.dataUrl),
         errors,
+        errorDetails,
         categoryIds: categoryIds || [],
     };
 }

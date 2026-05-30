@@ -158,6 +158,7 @@ export async function deleteAdminAsset(token: string, id: string) {
 }
 
 export type AdminModelChannel = {
+    id: string;
     protocol: "openai";
     name: string;
     baseUrl: string;
@@ -182,6 +183,7 @@ export type AdminPublicModelChannelSettings = {
 };
 
 export type AdminPublicModelChannelInfo = {
+    id: string;
     name: string;
     baseUrl: string;
     models: string[];
@@ -204,6 +206,29 @@ export type AdminPublicSettings = {
             enabled: boolean;
         };
     };
+    storage: {
+        mode: string;
+        allowUserProvider: boolean;
+    };
+};
+
+export type AdminStorageProvider = {
+    id: string;
+    name: string;
+    type: "s3";
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    publicBaseUrl: string;
+    pathPrefix: string;
+    weight: number;
+    enabled: boolean;
+    ownerUserId: string;
+    capacityBytes: number;
+    capacityCheckedAt: string;
+    capacityExceeded: boolean;
 };
 
 export type AdminPrivateSettings = {
@@ -217,6 +242,17 @@ export type AdminPrivateSettings = {
             clientId: string;
             clientSecret: string;
         };
+    };
+    storage: {
+        mode: string;
+        allowUserProvider: boolean;
+        providers: AdminStorageProvider[];
+        roundRobinCursor: number;
+        capacityCheck: {
+            enabled: boolean;
+            cron: string;
+        };
+        capacityLimitBytes: number;
     };
 };
 
@@ -245,4 +281,16 @@ export async function fetchChannelModels(token: string, payload: AdminChannelAct
 
 export async function testChannelModel(token: string, payload: AdminChannelActionRequest) {
     return apiPost<string>("/api/admin/settings/channel-test", payload, token);
+}
+
+export type StorageCapacityResult = {
+    bytes: number;
+    limitBytes: number;
+    overLimit: boolean;
+    checkedAt: string;
+    providerName: string;
+};
+
+export async function measureAdminStorageProvider(token: string, payload: { index: number; provider: AdminStorageProvider }) {
+    return apiPost<StorageCapacityResult>("/api/admin/storage/measure", payload, token);
 }

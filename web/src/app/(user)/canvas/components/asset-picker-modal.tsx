@@ -1,18 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { App, Empty, Input, Modal, Pagination, Spin, Tabs, Tag } from "antd";
-import { Search } from "lucide-react";
+import { App, Button, Empty, Input, Modal, Pagination, Spin, Tabs, Tag } from "antd";
+import { ImagePlus, Plus, Search } from "lucide-react";
 import axios from "axios";
 
 import { cn } from "@/lib/utils";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
 import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
+import { uploadImage } from "@/services/image-storage";
 
 export type AssetPickerTab = "my-assets" | "library";
 
-export type InsertAssetPayload = { kind: "text"; content: string; title: string } | { kind: "image"; dataUrl: string; title: string; storageKey?: string } | { kind: "video"; url: string; title: string; storageKey?: string; width?: number; height?: number };
+export type InsertAssetPayload =
+    | { kind: "text"; content: string; title: string; assetId?: string; source?: "asset" | "library" }
+    | { kind: "image"; dataUrl: string; title: string; storageKey?: string; assetId?: string; width?: number; height?: number; bytes?: number; mimeType?: string; source?: "asset" | "library" }
+    | { kind: "video"; url: string; title: string; storageKey?: string; assetId?: string; width?: number; height?: number; bytes?: number; mimeType?: string; source?: "asset" | "library" };
 
 type Props = {
     open: boolean;
@@ -71,10 +75,10 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
         try {
             setInserting(asset.id);
             if (asset.type === "text") {
-                onInsert({ kind: "text", content: asset.content, title: asset.title });
+                onInsert({ kind: "text", content: asset.content, title: asset.title, source: "library" });
             } else {
                 const dataUrl = await remoteImageToDataUrl(asset.url);
-                onInsert({ kind: "image", dataUrl, title: asset.title });
+                onInsert({ kind: "image", dataUrl, title: asset.title, source: "library" });
             }
         } catch {
             message.error("插入失败");
@@ -183,10 +187,19 @@ async function remoteImageToDataUrl(url: string) {
 }
 
 function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => void }) {
+    const { message } = App.useApp();
     const assets = useAssetStore((state) => state.assets);
+    const addAsset = useAssetStore((state) => state.addAsset);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState("all");
     const [page, setPage] = useState(1);
+    const [createOpen, setCreateOpen] = useState(false);
+    const [createKind, setCreateKind] = useState<"text" | "image">("image");
+    const [createTitle, setCreateTitle] = useState("");
+    const [createText, setCreateText] = useState("");
+    const [saving, setSaving] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
     const filtered = useMemo(() => {
         const query = keyword.trim().toLowerCase();
@@ -205,9 +218,60 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
 
     const handleInsert = (asset: Asset) => {
         if (asset.kind === "text") {
-            onInsert({ kind: "text", content: asset.data.content, title: asset.title });
+            onInsert({ kind: "text", content: asset.data.content, title: asset.title, assetId: asset.id, source: "asset" });
         } else {
-            onInsert(asset.kind === "video" ? { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height } : { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title });
+            onInsert(
+                asset.kind === "video"
+                    ? { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, assetId: asset.id, width: asset.data.width, height: asset.data.height, bytes: asset.data.bytes, mimeType: asset.data.mimeType, source: "asset" }
+                    : { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title, assetId: asset.id, width: asset.data.width, height: asset.data.height, bytes: asset.data.bytes, mimeType: asset.data.mimeType, source: "asset" },
+            );
+        }
+    };
+
+    const resetCreateForm = () => {
+        setCreateTitle("");
+        setCreateText("");
+        setSelectedFile(null);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+    };
+
+    const createAsset = async () => {
+        const title = createTitle.trim();
+        if (!title) {
+            message.error("请输入素材名称");
+            return;
+        }
+        setSaving(true);
+        try {
+            if (createKind === "text") {
+                const content = createText.trim();
+                if (!content) {
+                    message.error("请输入文本内容");
+                    return;
+                }
+                addAsset({ kind: "text", title, coverUrl: "", tags: [], source: "素材选择器", data: { content } });
+            } else {
+                if (!selectedFile) {
+                    message.error("请选择图片");
+                    return;
+                }
+                const stored = await uploadImage(selectedFile);
+                addAsset({
+                    kind: "image",
+                    title,
+                    coverUrl: stored.url,
+                    tags: [],
+                    source: "素材选择器",
+                    data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
+                });
+            }
+            message.success("素材已新增");
+            setCreateOpen(false);
+            resetCreateForm();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "新增素材失败");
+        } finally {
+            setSaving(false);
         }
     };
 
@@ -241,6 +305,9 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                         </Tag.CheckableTag>
                     ))}
                 </div>
+                <Button size="small" icon={<Plus className="size-3.5" />} onClick={() => setCreateOpen(true)}>
+                    新增素材
+                </Button>
             </div>
 
             {visible.length ? (
@@ -258,6 +325,42 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                     <Pagination size="small" current={page} pageSize={PAGE_SIZE} total={filtered.length} onChange={setPage} showSizeChanger={false} />
                 </div>
             )}
+            <Modal
+                title="新增素材"
+                open={createOpen}
+                onCancel={() => {
+                    setCreateOpen(false);
+                    resetCreateForm();
+                }}
+                onOk={() => void createAsset()}
+                okText="保存"
+                confirmLoading={saving}
+                destroyOnHidden
+            >
+                <div className="space-y-3 pt-2">
+                    <div className="flex gap-2">
+                        {[
+                            { value: "image" as const, label: "图片" },
+                            { value: "text" as const, label: "文本" },
+                        ].map((item) => (
+                            <Tag.CheckableTag key={item.value} checked={createKind === item.value} className={cn("prompt-filter-tag", createKind === item.value && "is-active")} onChange={() => setCreateKind(item.value)}>
+                                {item.label}
+                            </Tag.CheckableTag>
+                        ))}
+                    </div>
+                    <Input value={createTitle} placeholder="素材名称" onChange={(event) => setCreateTitle(event.target.value)} />
+                    {createKind === "text" ? (
+                        <Input.TextArea value={createText} autoSize={{ minRows: 5, maxRows: 10 }} placeholder="文本内容" onChange={(event) => setCreateText(event.target.value)} />
+                    ) : (
+                        <div className="space-y-2">
+                            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
+                            <Button icon={<ImagePlus className="size-4" />} onClick={() => fileInputRef.current?.click()}>
+                                {selectedFile ? selectedFile.name : "选择图片"}
+                            </Button>
+                        </div>
+                    )}
+                </div>
+            </Modal>
         </div>
     );
 }

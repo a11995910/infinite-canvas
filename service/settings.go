@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,8 @@ func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
 	settings = normalizeSettings(settings)
 	settings.Public.ModelChannel.Channels = publicChannelInfos(settings.Private.Channels)
+	settings.Public.Storage.Mode = settings.Private.Storage.Mode
+	settings.Public.Storage.AllowUserProvider = settings.Private.Storage.AllowUserProvider
 	if len(settings.Public.ModelChannel.AvailableModels) == 0 {
 		settings.Public.ModelChannel.AvailableModels = collectChannelModels(settings.Private.Channels)
 	}
@@ -38,9 +42,11 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 	settings = normalizeSettings(settings)
 	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
 	keepPrivateAuthSecrets(&settings, normalizeSettings(saved))
+	keepPrivateStorageSecrets(&settings, normalizeSettings(saved))
 	result, err := repository.SaveSettings(settings, now())
 	if err == nil {
 		RefreshPromptSyncScheduler()
+		RefreshStorageCapacityScheduler()
 	}
 	return hidePrivateAPIKeys(result), err
 }
@@ -91,6 +97,9 @@ func normalizePublicSetting(setting model.PublicSetting) model.PublicSetting {
 		enabled := true
 		setting.Auth.AllowRegister = &enabled
 	}
+	if setting.Storage.Mode == "" {
+		setting.Storage.Mode = "local_indexeddb"
+	}
 	return setting
 }
 
@@ -113,9 +122,13 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		setting.Channels = []model.ModelChannel{}
 	}
 	setting.PromptSync = normalizePromptSyncSetting(setting.PromptSync)
+	setting.Storage = normalizePrivateStorageSetting(setting.Storage)
 	for i := range setting.Channels {
 		if setting.Channels[i].Protocol == "" {
 			setting.Channels[i].Protocol = "openai"
+		}
+		if setting.Channels[i].ID == "" {
+			setting.Channels[i].ID = stableModelChannelID(setting.Channels[i])
 		}
 		if setting.Channels[i].Models == nil {
 			setting.Channels[i].Models = []string{}
@@ -130,9 +143,70 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 	return setting
 }
 
+func normalizePrivateStorageSetting(setting model.PrivateStorageSetting) model.PrivateStorageSetting {
+	if setting.Mode == "" {
+		setting.Mode = "local_indexeddb"
+	}
+	if setting.CapacityLimitBytes <= 0 {
+		setting.CapacityLimitBytes = 9 * 1024 * 1024 * 1024
+	}
+	setting.CapacityCheck = normalizeStorageCapacityCheckSetting(setting.CapacityCheck)
+	if setting.Providers == nil {
+		setting.Providers = []model.StorageProvider{}
+	}
+	for i := range setting.Providers {
+		setting.Providers[i] = normalizeStorageProvider(setting.Providers[i])
+	}
+	return setting
+}
+
+func normalizeStorageCapacityCheckSetting(setting model.StorageCapacityCheckSetting) model.StorageCapacityCheckSetting {
+	if setting.Cron == "" {
+		setting.Cron = "0 */6 * * *"
+	}
+	if setting.Enabled == nil {
+		enabled := false
+		setting.Enabled = &enabled
+	}
+	return setting
+}
+
+func normalizeStorageProvider(provider model.StorageProvider) model.StorageProvider {
+	provider.Name = strings.TrimSpace(provider.Name)
+	provider.Endpoint = strings.TrimRight(strings.TrimSpace(provider.Endpoint), "/")
+	provider.Bucket = strings.TrimSpace(provider.Bucket)
+	provider.AccessKeyID = strings.TrimSpace(provider.AccessKeyID)
+	if provider.Type == "" {
+		provider.Type = "s3"
+	}
+	if provider.Region == "" {
+		provider.Region = "auto"
+	}
+	if provider.ID == "" {
+		provider.ID = stableStorageProviderID(provider)
+	}
+	if provider.Weight <= 0 {
+		provider.Weight = 1
+	}
+	return provider
+}
+
+func stableStorageProviderID(provider model.StorageProvider) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{provider.OwnerUserID, provider.Name, provider.Endpoint, provider.Bucket}, "|")))
+	return "storage-" + hex.EncodeToString(sum[:])[:16]
+}
+
+func stableModelChannelID(channel model.ModelChannel) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{channel.Name, channel.BaseURL}, "|")))
+	return "channel-" + hex.EncodeToString(sum[:])[:16]
+}
+
 func hidePrivateAPIKeys(settings model.Settings) model.Settings {
 	for i := range settings.Private.Channels {
 		settings.Private.Channels[i].APIKey = ""
+	}
+	for i := range settings.Private.Storage.Providers {
+		settings.Private.Storage.Providers[i].SecretAccessKey = ""
 	}
 	settings.Private.Auth.LinuxDo.ClientSecret = ""
 	return settings
@@ -147,6 +221,32 @@ func keepPrivateAPIKeys(settings *model.Settings, saved model.Settings) {
 			settings.Private.Channels[i].APIKey = channel.APIKey
 		}
 	}
+}
+
+func keepPrivateStorageSecrets(settings *model.Settings, saved model.Settings) {
+	for i := range settings.Private.Storage.Providers {
+		if strings.TrimSpace(settings.Private.Storage.Providers[i].SecretAccessKey) != "" {
+			continue
+		}
+		if provider, ok := findSavedStorageProvider(settings.Private.Storage.Providers[i], saved.Private.Storage.Providers, i); ok {
+			settings.Private.Storage.Providers[i].SecretAccessKey = provider.SecretAccessKey
+		}
+	}
+}
+
+func findSavedStorageProvider(provider model.StorageProvider, saved []model.StorageProvider, index int) (model.StorageProvider, bool) {
+	for _, item := range saved {
+		if provider.ID != "" && item.ID == provider.ID {
+			return item, true
+		}
+		if item.Name == provider.Name && item.Endpoint == provider.Endpoint && item.Bucket == provider.Bucket {
+			return item, true
+		}
+	}
+	if index >= 0 && index < len(saved) {
+		return saved[index], true
+	}
+	return model.StorageProvider{}, false
 }
 
 func keepPrivateAuthSecrets(settings *model.Settings, saved model.Settings) {
@@ -168,6 +268,10 @@ func findSavedChannel(channel model.ModelChannel, saved []model.ModelChannel, in
 }
 
 func SelectModelChannel(modelName string) (model.ModelChannel, error) {
+	return SelectModelChannelForModel(modelName, "")
+}
+
+func SelectModelChannelForModel(modelName string, channelID string) (model.ModelChannel, error) {
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return model.ModelChannel{}, err
@@ -175,6 +279,13 @@ func SelectModelChannel(modelName string) (model.ModelChannel, error) {
 	channels := modelChannelsForModel(normalizePrivateSetting(settings.Private).Channels, modelName)
 	if len(channels) == 0 {
 		return model.ModelChannel{}, errors.New("没有可用模型渠道")
+	}
+	if strings.TrimSpace(channelID) != "" {
+		for _, channel := range channels {
+			if channel.ID == channelID {
+				return channel, nil
+			}
+		}
 	}
 	total := 0
 	for _, channel := range channels {
@@ -201,6 +312,9 @@ func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 	if channel.Protocol == "" {
 		channel.Protocol = "openai"
+	}
+	if channel.ID == "" {
+		channel.ID = stableModelChannelID(channel)
 	}
 	if channel.Models == nil {
 		channel.Models = []string{}
@@ -386,6 +500,7 @@ func publicChannelInfos(channels []model.ModelChannel) []model.PublicModelChanne
 			continue
 		}
 		result = append(result, model.PublicModelChannelInfo{
+			ID:      channel.ID,
 			Name:    channel.Name,
 			BaseURL: channel.BaseURL,
 			Models:  append([]string{}, channel.Models...),

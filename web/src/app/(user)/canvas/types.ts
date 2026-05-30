@@ -78,6 +78,8 @@ export type CanvasAssistantReference = {
     dataUrl?: string;
     storageKey?: string;
     text?: string;
+    source?: "node" | "asset" | "library";
+    assetId?: string;
 };
 
 export type CanvasAssistantImage = {

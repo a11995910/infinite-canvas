@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowUp, History, ImageIcon, LoaderCircle, MessageSquare, PanelRightClose, Plus, RotateCcw, Settings2, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowUp, FolderPlus, History, ImageIcon, LoaderCircle, MessageSquare, PanelRightClose, Plus, RotateCcw, Settings2, Sparkles, Trash2, X } from "lucide-react";
 import { Button, Modal, Tooltip } from "antd";
 import { motion } from "motion/react";
 
@@ -18,6 +18,7 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import { DiaTextReveal } from "@/components/ui/dia-text-reveal";
+import { AssetPickerModal, type InsertAssetPayload } from "./asset-picker-modal";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
 import { CanvasPromptLibrary } from "./canvas-prompt-library";
 import { CanvasNodeType, type CanvasAssistantImage, type CanvasAssistantMessage, type CanvasAssistantReference, type CanvasAssistantSession, type CanvasNodeData } from "../types";
@@ -58,6 +59,8 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
     const [closing, setClosing] = useState(false);
     const [resizing, setResizing] = useState(false);
     const [removedReferenceIds, setRemovedReferenceIds] = useState<Set<string>>(new Set());
+    const [manualReferences, setManualReferences] = useState<CanvasAssistantReference[]>([]);
+    const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [localSessions, setLocalSessions] = useState<CanvasAssistantSession[]>(() => (sessions.length ? sessions : [createSession()]));
     const [localActiveSessionId, setLocalActiveSessionId] = useState<string | null>(activeSessionId);
 
@@ -78,7 +81,7 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
     const hasMessages = messages.length > 0;
     const selectedNodeKey = useMemo(() => Array.from(selectedNodeIds).sort().join(","), [selectedNodeIds]);
     const allSelectedReferences = useMemo(() => buildAssistantReferences(nodes, selectedNodeIds), [nodes, selectedNodeIds]);
-    const selectedReferences = useMemo(() => allSelectedReferences.filter((item) => !removedReferenceIds.has(item.id)), [allSelectedReferences, removedReferenceIds]);
+    const selectedReferences = useMemo(() => [...allSelectedReferences.filter((item) => !removedReferenceIds.has(item.id)), ...manualReferences.filter((item) => !removedReferenceIds.has(item.id))], [allSelectedReferences, manualReferences, removedReferenceIds]);
     const iconButtonStyle = { color: theme.node.muted };
 
     useEffect(() => {
@@ -139,7 +142,11 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
     };
 
     const sendMessage = async (text: string, nextMode: AssistantMode, history: CanvasAssistantMessage[], savedReferences?: CanvasAssistantReference[]) => {
-        const requestConfig = { ...effectiveConfig, model: nextMode === "image" ? effectiveConfig.imageModel || effectiveConfig.model : effectiveConfig.textModel || effectiveConfig.model };
+        const requestConfig = {
+            ...effectiveConfig,
+            model: nextMode === "image" ? effectiveConfig.imageModel || effectiveConfig.model : effectiveConfig.textModel || effectiveConfig.model,
+            activeChannelId: nextMode === "image" ? effectiveConfig.imageChannelId : effectiveConfig.textChannelId,
+        };
         if (!isAiConfigReady(requestConfig, requestConfig.model)) {
             openConfigDialog(true);
             return;
@@ -189,6 +196,27 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
         const text = prompt.trim();
         if (!text || isRunning) return;
         await sendMessage(text, mode, messages);
+    };
+
+    const insertPickedAsset = (payload: InsertAssetPayload) => {
+        if (payload.kind === "text") {
+            const text = payload.content.trim();
+            if (text) setPrompt((value) => (value.trim() ? `${value.trim()}\n\n${text}` : text));
+        } else if (payload.kind === "image") {
+            setManualReferences((value) => [
+                ...value,
+                {
+                    id: `asset-${payload.assetId || nanoid()}`,
+                    type: CanvasNodeType.Image,
+                    title: payload.title,
+                    dataUrl: payload.dataUrl,
+                    storageKey: payload.storageKey,
+                    source: payload.source === "asset" ? "asset" : "library",
+                    assetId: payload.assetId,
+                },
+            ]);
+        }
+        setAssetPickerOpen(false);
     };
 
     const retryMessage = (message: CanvasAssistantMessage) => {
@@ -326,9 +354,11 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
                         onMissingConfig={() => openConfigDialog(true)}
                         onRemoveReference={(id) => {
                             setRemovedReferenceIds((prev) => new Set(prev).add(id));
+                            setManualReferences((value) => value.filter((item) => item.id !== id));
                             if (selectedNodeIds.has(id)) onSelectNodeIds(new Set(Array.from(selectedNodeIds).filter((nodeId) => nodeId !== id)));
                         }}
                         onPasteImage={onPasteImage}
+                        onPickAsset={() => setAssetPickerOpen(true)}
                         modelCosts={modelCosts}
                     />
                 ) : null}
@@ -356,6 +386,7 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
                 >
                     <p className="text-sm opacity-60">将删除 {deleteChatIds.length} 条对话记录，此操作不可撤销。</p>
                 </Modal>
+                <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={insertPickedAsset} onClose={() => setAssetPickerOpen(false)} />
             </motion.aside>
         </motion.div>
     );
@@ -374,6 +405,7 @@ function AssistantComposer({
     onMissingConfig,
     onRemoveReference,
     onPasteImage,
+    onPickAsset,
     modelCosts,
 }: {
     mode: AssistantMode;
@@ -388,6 +420,7 @@ function AssistantComposer({
     onMissingConfig: () => void;
     onRemoveReference: (id: string) => void;
     onPasteImage: (file: File) => void;
+    onPickAsset: () => void;
     modelCosts?: { model: string; credits: number }[];
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -425,6 +458,11 @@ function AssistantComposer({
                 <div className="mt-2 flex items-center justify-between gap-2">
                     <div className="canvas-composer-tools flex min-w-0 flex-1 items-center gap-1">
                         <CanvasPromptLibrary onSelect={onPromptChange} />
+                        <Tooltip title="我的素材">
+                            <button type="button" className="canvas-composer-icon flex h-8 min-w-8 items-center justify-center rounded-full border-0 bg-transparent" style={{ color: theme.node.text }} onClick={onPickAsset}>
+                                <FolderPlus className="size-4" />
+                            </button>
+                        </Tooltip>
                         <AssistantModeSwitch mode={mode} theme={theme} onChange={onModeChange} />
                         {mode === "image" ? (
                             <>

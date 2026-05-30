@@ -1,6 +1,7 @@
 .next/
 out/
 node_modules/
+.cache/
 .env*
 !.env.example
 data/

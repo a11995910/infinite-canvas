@@ -2,7 +2,7 @@ import axios from "axios";
 
 import { dataUrlToFile } from "@/lib/image-utils";
 import { imageToDataUrl } from "@/services/image-storage";
-import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import { nanoid } from "nanoid";
@@ -27,6 +27,16 @@ type ResponsesApiResponse = {
 };
 
 type GeneratedImage = { id: string; dataUrl: string };
+
+export class ImageRequestError extends Error {
+    detail?: string;
+
+    constructor(message: string, detail?: unknown) {
+        super(message);
+        this.name = "ImageRequestError";
+        this.detail = formatErrorDetail(detail);
+    }
+}
 
 type ImageRequestParams = {
     n: number;
@@ -143,7 +153,7 @@ function resolveImageDataUrl(item: Record<string, unknown>, mime: string) {
 
 function parseImagePayload(payload: ImageApiResponse, mime: string): GeneratedImage[] {
     if (typeof payload.code === "number" && payload.code !== 0) {
-        throw new Error(payload.msg || "请求失败");
+        throw new ImageRequestError(payload.msg || "请求失败", payload);
     }
     const images =
         payload.data
@@ -152,7 +162,7 @@ function parseImagePayload(payload: ImageApiResponse, mime: string): GeneratedIm
             .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
 
     if (images.length === 0) {
-        throw new Error("接口没有返回图片");
+        throw new ImageRequestError("接口没有返回图片", payload);
     }
 
     return images;
@@ -169,7 +179,7 @@ function collectResponsesImageStrings(value: unknown, depth = 0): string[] {
     if (Array.isArray(value)) return value.flatMap((item) => collectResponsesImageStrings(item, depth + 1));
     if (typeof value !== "object") return [];
     const record = value as Record<string, unknown>;
-    return ["result", "b64_json", "base64", "image", "image_data", "data", "partial_image_b64"].flatMap((key) => collectResponsesImageStrings(record[key], depth + 1));
+    return ["result", "b64_json", "base64", "image", "image_data", "data"].flatMap((key) => collectResponsesImageStrings(record[key], depth + 1));
 }
 
 function getResponsesImageResultBase64(result: unknown) {
@@ -186,7 +196,7 @@ function collectResponsesImageBase64(item: Record<string, unknown>) {
 
 function parseResponsesPayload(payload: ResponsesApiResponse, mime: string): GeneratedImage[] {
     if (typeof payload.code === "number" && payload.code !== 0) {
-        throw new Error(payload.msg || "请求失败");
+        throw new ImageRequestError(payload.msg || "请求失败", payload);
     }
     const images =
         payload.output
@@ -196,7 +206,7 @@ function parseResponsesPayload(payload: ResponsesApiResponse, mime: string): Gen
             .map((b64) => ({ id: nanoid(), dataUrl: normalizeBase64Image(b64, mime) })) || [];
 
     if (images.length === 0) {
-        throw new Error("Responses API 没有返回图片");
+        throw new ImageRequestError("Responses API 没有返回图片", payload);
     }
 
     return images;
@@ -210,17 +220,28 @@ function readAxiosError(error: unknown, fallback: string) {
     return error instanceof Error ? error.message : fallback;
 }
 
-async function readFetchError(response: Response, fallback: string) {
+async function fetchErrorDetail(response: Response, fallback: string) {
     try {
-        const payload = (await response.json()) as { error?: { message?: string }; msg?: string; message?: string };
-        return payload.msg || payload.error?.message || payload.message || `${fallback}：${response.status}`;
-    } catch {
+        const text = await response.text();
+        if (!text.trim()) return { message: `${fallback}：${response.status}`, detail: `${response.status} ${response.statusText}` };
         try {
-            const text = await response.text();
-            return text.trim() || `${fallback}：${response.status}`;
+            const payload = JSON.parse(text) as { error?: { message?: string }; msg?: string; message?: string };
+            return { message: payload.msg || payload.error?.message || payload.message || `${fallback}：${response.status}`, detail: payload };
         } catch {
-            return `${fallback}：${response.status}`;
+            return { message: text.trim() || `${fallback}：${response.status}`, detail: text };
         }
+    } catch {
+        return { message: `${fallback}：${response.status}`, detail: `${response.status} ${response.statusText}` };
+    }
+}
+
+function formatErrorDetail(detail: unknown) {
+    if (detail == null) return "";
+    if (typeof detail === "string") return detail;
+    try {
+        return JSON.stringify(detail, null, 2);
+    } catch {
+        return String(detail);
     }
 }
 
@@ -241,6 +262,30 @@ async function withTimeout<T>(timeoutSeconds: number, run: (signal: AbortSignal)
     }
 }
 
+function isTransientStatus(status: number) {
+    return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+function retryDelay(attempt: number) {
+    return 700 * attempt;
+}
+
+async function requestWithTransientRetry(run: () => Promise<Response>, retries = 2) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+            const response = await run();
+            if (!isTransientStatus(response.status) || attempt === retries) return response;
+            lastError = new Error(`上游接口临时不可用：${response.status}`);
+        } catch (error) {
+            lastError = error;
+            if (attempt === retries) throw error;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, retryDelay(attempt + 1)));
+    }
+    throw lastError instanceof Error ? lastError : new Error("请求失败");
+}
+
 function parseServerSentEventBlock(block: string) {
     const data = block
         .split(/\r?\n/)
@@ -253,17 +298,24 @@ function parseServerSentEventBlock(block: string) {
 }
 
 async function readJsonServerSentEvents(response: Response, onEvent: (event: Record<string, unknown>) => void) {
-    if (!response.body) throw new Error("接口未返回可读取的流式响应");
+    if (!response.body) throw new ImageRequestError("接口未返回可读取的流式响应", `${response.status} ${response.statusText}`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    const events: Record<string, unknown>[] = [];
 
     const processBlock = (block: string) => {
-        const event = parseServerSentEventBlock(block);
+        let event: Record<string, unknown> | null = null;
+        try {
+            event = parseServerSentEventBlock(block);
+        } catch (error) {
+            throw new ImageRequestError(error instanceof Error ? error.message : "流式响应解析失败", block);
+        }
         if (!event) return;
+        events.push(event);
         const error = event.error;
         if (error && typeof error === "object" && !Array.isArray(error) && typeof (error as { message?: unknown }).message === "string") {
-            throw new Error((error as { message: string }).message);
+            throw new ImageRequestError((error as { message: string }).message, event);
         }
         onEvent(event);
     };
@@ -282,6 +334,7 @@ async function readJsonServerSentEvents(response: Response, onEvent: (event: Rec
     }
     buffer += decoder.decode();
     if (buffer.trim()) processBlock(buffer);
+    return events;
 }
 
 function isEventStreamResponse(response: Response) {
@@ -291,7 +344,7 @@ function isEventStreamResponse(response: Response) {
 async function parseImagesStreamResponse(response: Response, mime: string): Promise<GeneratedImage[]> {
     const completedItems: Record<string, unknown>[] = [];
     let resultPayload: ImageApiResponse | null = null;
-    await readJsonServerSentEvents(response, (event) => {
+    const events = await readJsonServerSentEvents(response, (event) => {
         const type = typeof event.type === "string" ? event.type : "";
         const object = typeof event.object === "string" ? event.object : "";
         if (object === "image.generation.result" || object === "image.edit.result") {
@@ -303,14 +356,14 @@ async function parseImagesStreamResponse(response: Response, mime: string): Prom
     });
     if (resultPayload) return parseImagePayload(resultPayload, mime);
     if (completedItems.length) return parseImagePayload({ data: completedItems }, mime);
-    throw new Error("流式接口未返回最终图片数据");
+    throw new ImageRequestError("流式接口未返回最终图片数据", events);
 }
 
 async function parseResponsesStreamResponse(response: Response, mime: string): Promise<GeneratedImage[]> {
     let completedPayload: ResponsesApiResponse | null = null;
     const output: Record<string, unknown>[] = [];
     const partialImages: string[] = [];
-    await readJsonServerSentEvents(response, (event) => {
+    const events = await readJsonServerSentEvents(response, (event) => {
         if (event.type === "response.image_generation_call.partial_image") {
             const b64 = getStringRecordValue(event, "partial_image_b64");
             if (b64) partialImages.push(b64);
@@ -328,7 +381,13 @@ async function parseResponsesStreamResponse(response: Response, mime: string): P
     try {
         return parseResponsesPayload(completedPayload || { output }, mime);
     } catch (error) {
-        if (!partialImages.length) throw error;
+        if (!partialImages.length) {
+            throw new ImageRequestError(error instanceof Error ? error.message : "Responses API 没有返回图片", {
+                completedPayload,
+                output,
+                events,
+            });
+        }
         const lastPartialImage = partialImages[partialImages.length - 1];
         return [{ id: nanoid(), dataUrl: normalizeBase64Image(lastPartialImage, mime) }];
     }
@@ -358,7 +417,9 @@ function withPromptGuard(config: AiConfig, prompt: string) {
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
-    return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
+    if (config.channelMode === "remote") return `/api/v1${path}`;
+    const channel = localChannelForActiveModel(config);
+    return buildApiUrl(channel?.baseUrl || config.baseUrl, path);
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {
@@ -367,10 +428,11 @@ function aiHeaders(config: AiConfig, contentType?: string) {
     return config.channelMode === "remote"
         ? {
               Authorization: `Bearer ${token}`,
+              ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}),
               ...(contentType ? { "Content-Type": contentType } : {}),
           }
         : {
-              Authorization: `Bearer ${config.apiKey}`,
+              Authorization: `Bearer ${localChannelForActiveModel(config)?.apiKey || config.apiKey}`,
               ...(contentType ? { "Content-Type": contentType } : {}),
           };
 }
@@ -402,15 +464,20 @@ async function requestImageGenerationSingle(config: AiConfig, prompt: string, pa
         body.partial_images = params.streamPartialImages;
     }
 
-    const response = await withTimeout(params.timeoutSeconds, (signal) =>
-        fetch(aiApiUrl(config, "/images/generations"), {
-            method: "POST",
-            headers: aiHeaders(config, "application/json"),
-            body: JSON.stringify(body),
-            signal,
-        }),
+    const response = await requestWithTransientRetry(() =>
+        withTimeout(params.timeoutSeconds, (signal) =>
+            fetch(aiApiUrl(config, "/images/generations"), {
+                method: "POST",
+                headers: aiHeaders(config, "application/json"),
+                body: JSON.stringify(body),
+                signal,
+            }),
+        ),
     );
-    if (!response.ok) throw new Error(await readFetchError(response, "请求失败"));
+    if (!response.ok) {
+        const error = await fetchErrorDetail(response, "请求失败");
+        throw new ImageRequestError(error.message, error.detail);
+    }
     return config.streamImages && isEventStreamResponse(response) ? parseImagesStreamResponse(response, mime) : parseImagePayload((await response.json()) as ImageApiResponse, mime);
 }
 
@@ -433,15 +500,20 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));
 
-    const response = await withTimeout(params.timeoutSeconds, (signal) =>
-        fetch(aiApiUrl(config, "/images/edits"), {
-            method: "POST",
-            headers: aiHeaders(config),
-            body: formData,
-            signal,
-        }),
+    const response = await requestWithTransientRetry(() =>
+        withTimeout(params.timeoutSeconds, (signal) =>
+            fetch(aiApiUrl(config, "/images/edits"), {
+                method: "POST",
+                headers: aiHeaders(config),
+                body: formData,
+                signal,
+            }),
+        ),
     );
-    if (!response.ok) throw new Error(await readFetchError(response, "请求失败"));
+    if (!response.ok) {
+        const error = await fetchErrorDetail(response, "请求失败");
+        throw new ImageRequestError(error.message, error.detail);
+    }
     return config.streamImages && isEventStreamResponse(response) ? parseImagesStreamResponse(response, mime) : parseImagePayload((await response.json()) as ImageApiResponse, mime);
 }
 
@@ -486,15 +558,20 @@ async function requestResponsesSingle(config: AiConfig, prompt: string, inputIma
     };
     if (config.streamImages) body.stream = true;
 
-    const response = await withTimeout(params.timeoutSeconds, (signal) =>
-        fetch(aiApiUrl(config, "/responses"), {
-            method: "POST",
-            headers: aiHeaders(config, "application/json"),
-            body: JSON.stringify(body),
-            signal,
-        }),
+    const response = await requestWithTransientRetry(() =>
+        withTimeout(params.timeoutSeconds, (signal) =>
+            fetch(aiApiUrl(config, "/responses"), {
+                method: "POST",
+                headers: aiHeaders(config, "application/json"),
+                body: JSON.stringify(body),
+                signal,
+            }),
+        ),
     );
-    if (!response.ok) throw new Error(await readFetchError(response, "请求失败"));
+    if (!response.ok) {
+        const error = await fetchErrorDetail(response, "请求失败");
+        throw new ImageRequestError(error.message, error.detail);
+    }
     return config.streamImages && isEventStreamResponse(response) ? parseResponsesStreamResponse(response, mime) : parseResponsesPayload((await response.json()) as ResponsesApiResponse, mime);
 }
 
@@ -519,6 +596,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
         refreshRemoteUser(config);
         return images;
     } catch (error) {
+        if (error instanceof ImageRequestError) throw error;
         throw new Error(error instanceof Error ? error.message : "请求失败");
     }
 }
@@ -529,6 +607,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         refreshRemoteUser(config);
         return images;
     } catch (error) {
+        if (error instanceof ImageRequestError) throw error;
         throw new Error(error instanceof Error ? error.message : "请求失败");
     }
 }

@@ -392,6 +392,80 @@ services:
 - 开启 HTTPS。
 - 定期备份 `.env` 和 `data`。
 
+## 自定义前后端接口
+
+本项目分为 Next.js 前端和 Go 后端。默认部署时：
+
+- Go 后端监听 `18080`。
+- Next.js 前端监听 `13000`。
+- 前端通过 `/api/*` 代理到后端。
+
+### 开发环境修改接口地址
+
+前端开发代理由 `API_BASE_URL` 控制：
+
+```bash
+cd web
+API_BASE_URL=http://127.0.0.1:18080 npm run dev
+```
+
+如果后端改到 `19080`：
+
+```bash
+PORT=19080 go run .
+cd web
+API_BASE_URL=http://127.0.0.1:19080 npm run dev
+```
+
+### 生产环境修改接口地址
+
+源码部署时，启动前端时设置：
+
+```bash
+API_BASE_URL=http://127.0.0.1:18080 HOSTNAME=0.0.0.0 PORT=13000 npm run start
+```
+
+systemd 部署时，修改 `infinite-canvas-web.service`：
+
+```ini
+Environment=API_BASE_URL=http://127.0.0.1:18080
+```
+
+Docker 部署时，如果 Go 后端仍在同一个容器内，不需要改；Dockerfile 默认用：
+
+```bash
+API_BASE_URL=http://127.0.0.1:18080
+```
+
+当前单容器 Dockerfile 的启动命令里写了 `PORT=18080` 和 `API_BASE_URL=http://127.0.0.1:18080`，如果要改内部后端端口，需要同步修改 [Dockerfile](/Users/fakaihu/Documents/project/image2/infinite-canvas/Dockerfile:41) 的 `CMD`。
+
+如果你拆成两个容器或两个服务器，需要把前端容器里的 `API_BASE_URL` 指向后端服务地址，并把后端独立服务的 `PORT` 设为对应端口，例如：
+
+```yaml
+services:
+  web:
+    command: sh -c "cd /app/web && HOSTNAME=0.0.0.0 PORT=13000 API_BASE_URL=http://api:18080 npm run start"
+    environment:
+      API_BASE_URL: http://api:18080
+  api:
+    environment:
+      PORT: 18080
+```
+
+### 反向代理建议
+
+推荐只对外暴露前端站点：
+
+```text
+https://你的域名 -> 127.0.0.1:13000
+```
+
+不要直接把 `18080` 暴露到公网。所有浏览器请求都从前端域名的 `/api/*` 进入，再由 Next.js 转发到 Go 后端。
+
+### 跨域说明
+
+默认同域方案不需要 CORS。只有当你让浏览器直接访问另一个域名的 Go 后端时，才需要额外处理跨域和鉴权头。生产部署优先使用同域 `/api/*` 代理，配置更简单。
+
 ## 常见问题
 
 ### 为什么不能继续用原作者镜像

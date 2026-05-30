@@ -1,4 +1,4 @@
-import { FileText, ImagePlus, Images, Maximize2, Video, WandSparkles } from "lucide-react";
+import { FileText, ImagePlus, Images, Maximize2, Video } from "lucide-react";
 
 export const navigationTools = [
     {
@@ -10,11 +10,6 @@ export const navigationTools = [
         slug: "image",
         label: "生图工作台",
         icon: ImagePlus,
-    },
-    {
-        slug: "workflows",
-        label: "创作工作流",
-        icon: WandSparkles,
     },
     {
         slug: "video",

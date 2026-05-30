@@ -19,6 +19,10 @@
 - `prompts`
 - `assets`
 - `settings`
+- `credit_logs`
+- `storage_objects`
+- `user_configs`
+- `creative_workflows`
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
 
@@ -141,6 +145,7 @@
 | `channels` | object[] | 模型渠道配置列表 |
 | `promptSync` | object | GitHub 远程提示词定时同步配置 |
 | `auth` | object | 私有登录配置 |
+| `storage` | object | 对象存储配置 |
 
 `channels` 每项字段：
 
@@ -172,6 +177,17 @@
 
 后端请求模型时，先按模型名筛选启用且包含该模型的渠道，再按 `weight` 加权随机选择一个渠道。
 
+`storage` 当前字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `mode` | string | 存储模式：`local_indexeddb`、`server_sqlite_s3`、`hybrid` |
+| `allowUserProvider` | bool | 是否允许用户配置自己的 S3/R2 |
+| `providers` | object[] | 管理员配置的 S3/R2 存储 |
+| `roundRobinCursor` | number | 多存储轮询游标 |
+| `capacityCheck` | object | 容量统计定时任务配置 |
+| `capacityLimitBytes` | number | 单个存储容量上限，默认约 9 GiB |
+
 ### credit_logs
 
 用户算力点变更流水表。当前记录后台手动调整、模型调用预扣和模型调用失败返还。
@@ -195,3 +211,54 @@
 | `admin_adjust` | 后台手动调整 |
 | `ai_consume` | 调用后端模型接口消费 |
 | `ai_refund` | 后端模型接口调用失败返还 |
+
+### storage_objects
+
+对象存储文件索引表。图片文件写入服务端存储时，SQLite 保存文件元数据，真实文件保存在 S3/R2。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 主键，也是前端 `server:{id}` 中的对象 ID |
+| `provider_id` | string | 写入时使用的存储配置 ID |
+| `bucket` | string | 存储桶 |
+| `object_key` | string | S3/R2 对象 Key，唯一索引 |
+| `public_url` | string | 公开访问地址 |
+| `mime_type` | string | 文件 MIME |
+| `bytes` | number | 文件大小 |
+| `width` | number | 图片宽度 |
+| `height` | number | 图片高度 |
+| `sha256` | string | 文件哈希 |
+| `created_by` | string | 创建用户 ID |
+| `created_at` | string | 创建时间 |
+| `deleted_at` | string | 删除时间；当前删除文件时会直接删除记录 |
+
+### user_configs
+
+用户配置表。用于把用户模型配置、用户 S3/R2 配置、画布数据和生图历史跟随账号同步。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `user_id` | string | 主键，用户 ID |
+| `model_config` | text | 用户同步的本地直连模型配置 JSON |
+| `storage_provider` | text | 用户自定义 S3/R2 配置 JSON |
+| `canvas_data` | text | 用户画布数据快照 JSON |
+| `image_history` | text | 用户生图历史和分类快照 JSON |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
+
+### creative_workflows
+
+创作工作流模板表。工作流主体数据保存在 `data` JSON 中，外层字段用于查询和权限判断。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 主键 |
+| `owner_user_id` | string | 创建者用户 ID |
+| `scope` | string | `private` 或 `public` |
+| `name` | string | 工作流名称 |
+| `category` | string | 分类 |
+| `description` | string | 描述 |
+| `data` | text | 完整工作流 JSON，包含变量、提示词模板和生图配置 |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
+| `last_run_at` | string | 最近运行时间 |

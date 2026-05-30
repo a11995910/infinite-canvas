@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/basketikun/infinite-canvas/config"
 	"github.com/basketikun/infinite-canvas/model"
@@ -12,6 +14,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var promptCategories = []model.PromptCategory{
@@ -41,7 +44,17 @@ func DB() (*gorm.DB, error) {
 		if driver == "sqlite" && dsn != ":memory:" {
 			_ = os.MkdirAll(filepath.Dir(dsn), 0755)
 		}
-		db, dbErr = gorm.Open(dialector(driver, dsn), &gorm.Config{})
+		db, dbErr = gorm.Open(dialector(driver, dsn), &gorm.Config{
+			Logger: logger.New(
+				log.New(os.Stdout, "\r\n", log.LstdFlags),
+				logger.Config{
+					SlowThreshold:             time.Second,
+					LogLevel:                  logger.Warn,
+					IgnoreRecordNotFoundError: true,
+					ParameterizedQueries:      true,
+				},
+			),
+		})
 		if dbErr != nil {
 			return
 		}
@@ -51,6 +64,9 @@ func DB() (*gorm.DB, error) {
 			&model.Prompt{},
 			&model.Asset{},
 			&model.Setting{},
+			&model.StorageObject{},
+			&model.UserConfig{},
+			&model.CreativeWorkflow{},
 		)
 	})
 	return db, dbErr

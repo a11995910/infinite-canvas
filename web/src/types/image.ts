@@ -5,4 +5,7 @@ export type ReferenceImage = {
     dataUrl: string;
     url?: string;
     storageKey?: string;
+    source?: "upload" | "clipboard" | "asset" | "result" | "library" | "workflow";
+    assetId?: string;
+    temporary?: boolean;
 };

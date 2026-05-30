@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
-import { fetchAdminSettings, fetchChannelModels, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings } from "@/services/api/admin";
+import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
@@ -38,10 +38,12 @@ const emptySettings: AdminSettings = {
             allowCustomChannel: true,
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
+        storage: { mode: "local_indexeddb", allowUserProvider: false },
     },
-    private: { channels: [], promptSync: { enabled: true, cron: "*/5 * * * *" }, auth: { linuxDo: { clientId: "", clientSecret: "" } } },
+    private: { channels: [], promptSync: { enabled: true, cron: "*/5 * * * *" }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
 };
-const emptyChannel: AdminModelChannel = { protocol: "openai", name: "", baseUrl: "", apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
+const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: "", apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
+const emptyStorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "images", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
 
 type SettingsTabKey = "public" | "private";
 type EditorMode = "visual" | "json";
@@ -73,6 +75,7 @@ export default function AdminSettingsPage() {
     const [isFetchingChannelModels, setIsFetchingChannelModels] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [measuringProviderIndex, setMeasuringProviderIndex] = useState<number | null>(null);
     const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
@@ -354,6 +357,23 @@ export default function AdminSettingsPage() {
         message.success("已保存");
     }
 
+    async function measureStorageProviderAt(index: number) {
+        if (!token) return;
+        const provider = normalizeStorageProvider(form.getFieldValue(["private", "storage", "providers", index]));
+        setMeasuringProviderIndex(index);
+        try {
+            const result = await measureAdminStorageProvider(token, { index, provider });
+            const next = normalizeSettings(await fetchAdminSettings(token));
+            form.setFieldsValue(next);
+            setJsonText({ public: JSON.stringify(next.public, null, 2), private: JSON.stringify(next.private, null, 2) });
+            message.success(`容量统计完成：${formatStorageBytes(result.bytes)}${result.overLimit ? "，已达到上限并禁用" : ""}`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "容量统计失败");
+        } finally {
+            setMeasuringProviderIndex(null);
+        }
+    }
+
     return (
         <main style={{ padding: 24 }}>
             <Flex vertical gap={16}>
@@ -541,6 +561,133 @@ export default function AdminSettingsPage() {
                                             </Form.Item>
                                         </Col>
                                     </Row>
+                                </Card>
+                                <Card size="small" title="数据存储">
+                                    <Row gutter={16}>
+                                        <Col xs={24} md={8}>
+                                            <Form.Item name={["private", "storage", "mode"]} label="存储模式" extra="local_indexeddb 保持浏览器本地；server_sqlite_s3 使用后端 SQLite + S3/R2。">
+                                                <Select
+                                                    options={[
+                                                        { value: "local_indexeddb", label: "IndexedDB 本地" },
+                                                        { value: "server_sqlite_s3", label: "SQLite + S3/R2" },
+                                                        { value: "hybrid", label: "混合模式" },
+                                                    ]}
+                                                />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col xs={24} md={8}>
+                                            <Form.Item name={["private", "storage", "allowUserProvider"]} label="允许用户配置 S3" valuePropName="checked">
+                                                <Switch />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col xs={24} md={8}>
+                                            <Form.Item name={["private", "storage", "capacityCheck", "enabled"]} label="定时统计容量" valuePropName="checked">
+                                                <Switch />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col xs={24} md={8}>
+                                            <Form.Item name={["private", "storage", "capacityCheck", "cron"]} label="容量统计 Cron">
+                                                <Input placeholder="0 */6 * * *" />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col xs={24} md={8}>
+                                            <Form.Item name={["private", "storage", "capacityLimitBytes"]} label="容量上限(字节)" extra="默认 9GB，达到上限后会自动禁用该配置。">
+                                                <InputNumber min={1} className="!w-full" />
+                                            </Form.Item>
+                                        </Col>
+                                    </Row>
+                                    <Form.List name={["private", "storage", "providers"]}>
+                                        {(fields, { add, remove }) => (
+                                            <Flex vertical gap={12}>
+                                                <Button icon={<PlusOutlined />} onClick={() => add({ ...emptyStorageProvider })}>
+                                                    新增 S3/R2 配置
+                                                </Button>
+                                                {fields.map((field) => (
+                                                    <Card
+                                                        key={field.key}
+                                                        size="small"
+                                                        title={`对象存储 ${field.name + 1}`}
+                                                        extra={
+                                                            <Flex gap={8}>
+                                                                <Button size="small" loading={measuringProviderIndex === field.name} onClick={() => void measureStorageProviderAt(field.name)}>
+                                                                    统计容量
+                                                                </Button>
+                                                                <Button danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
+                                                            </Flex>
+                                                        }
+                                                    >
+                                                        <Row gutter={12}>
+                                                            <Col xs={24} md={6}>
+                                                                <Form.Item name={[field.name, "name"]} label="名称">
+                                                                    <Input placeholder="Cloudflare R2" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={6}>
+                                                                <Form.Item name={[field.name, "endpoint"]} label="Endpoint">
+                                                                    <Input placeholder="https://<account>.r2.cloudflarestorage.com" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={4}>
+                                                                <Form.Item name={[field.name, "region"]} label="Region">
+                                                                    <Input placeholder="auto" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={4}>
+                                                                <Form.Item name={[field.name, "bucket"]} label="Bucket">
+                                                                    <Input />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={4}>
+                                                                <Form.Item name={[field.name, "enabled"]} label="启用" valuePropName="checked">
+                                                                    <Switch />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={6}>
+                                                                <Form.Item name={[field.name, "accessKeyId"]} label="Access Key ID">
+                                                                    <Input />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={6}>
+                                                                <Form.Item name={[field.name, "secretAccessKey"]} label="Secret Access Key">
+                                                                    <Input.Password placeholder="留空沿用已保存密钥" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={6}>
+                                                                <Form.Item name={[field.name, "publicBaseUrl"]} label="公开访问域名">
+                                                                    <Input placeholder="可选，不填则走后端代理读取" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={3}>
+                                                                <Form.Item name={[field.name, "pathPrefix"]} label="路径前缀">
+                                                                    <Input placeholder="images" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={3}>
+                                                                <Form.Item name={[field.name, "weight"]} label="权重">
+                                                                    <InputNumber min={1} className="!w-full" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={4}>
+                                                                <Form.Item label="已用容量">
+                                                                    <Typography.Text>{formatStorageBytes(form.getFieldValue(["private", "storage", "providers", field.name, "capacityBytes"]) || 0)}</Typography.Text>
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={5}>
+                                                                <Form.Item name={[field.name, "capacityCheckedAt"]} label="统计时间">
+                                                                    <Input disabled />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={3}>
+                                                                <Form.Item name={[field.name, "capacityExceeded"]} label="超限" valuePropName="checked">
+                                                                    <Switch disabled />
+                                                                </Form.Item>
+                                                            </Col>
+                                                        </Row>
+                                                    </Card>
+                                                ))}
+                                            </Flex>
+                                        )}
+                                    </Form.List>
                                 </Card>
                                 <Button type="primary" icon={<PlusOutlined />} onClick={() => openChannelDrawer(null)}>
                                     新增渠道
@@ -846,6 +993,10 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
                 enabled: setting.auth?.linuxDo?.enabled === true,
             },
         },
+        storage: {
+            mode: setting.storage?.mode || "local_indexeddb",
+            allowUserProvider: setting.storage?.allowUserProvider === true,
+        },
     };
 }
 
@@ -866,11 +1017,38 @@ function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}
                 clientSecret: setting.auth?.linuxDo?.clientSecret || "",
             },
         },
+        storage: {
+            mode: setting.storage?.mode || "local_indexeddb",
+            allowUserProvider: setting.storage?.allowUserProvider === true,
+            providers: (setting.storage?.providers || []).map(normalizeStorageProvider),
+            roundRobinCursor: Number(setting.storage?.roundRobinCursor) || 0,
+            capacityCheck: {
+                enabled: setting.storage?.capacityCheck?.enabled === true,
+                cron: setting.storage?.capacityCheck?.cron || "0 */6 * * *",
+            },
+            capacityLimitBytes: Number(setting.storage?.capacityLimitBytes) || 9 * 1024 * 1024 * 1024,
+        },
+    };
+}
+
+function normalizeStorageProvider(item: Partial<AdminStorageProvider> = {}): AdminStorageProvider {
+    return {
+        ...emptyStorageProvider,
+        ...item,
+        id: item.id || "",
+        type: "s3",
+        region: item.region || "auto",
+        weight: Math.max(1, Number(item.weight) || 1),
+        enabled: item.enabled !== false,
+        capacityBytes: Number(item.capacityBytes) || 0,
+        capacityCheckedAt: item.capacityCheckedAt || "",
+        capacityExceeded: item.capacityExceeded === true,
     };
 }
 
 function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChannel {
     return {
+        id: item.id || "",
         protocol: "openai",
         name: item.name || "",
         baseUrl: item.baseUrl || "",
@@ -937,6 +1115,18 @@ function modelSummary(models: string[]) {
     if (!models.length) return "未配置模型";
     const preview = models.slice(0, 3).join(", ");
     return models.length > 3 ? `${models.length} 个模型：${preview}...` : preview;
+}
+
+function formatStorageBytes(bytes: number) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = bytes;
+    let index = 0;
+    while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+    }
+    return `${value.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
 }
 
 function parseTabJson(tab: "public", value: string): AdminSettings["public"] | null;
