@@ -90,6 +90,10 @@ func ClientAICallLog(w http.ResponseWriter, r *http.Request) {
 	}
 	var request service.AICallLogInput
 	_ = json.NewDecoder(r.Body).Decode(&request)
+	if !service.LocalDirectAILogEnabled() {
+		OK(w, true)
+		return
+	}
 	request.UserID = user.ID
 	request.UserDisplayName = firstNonEmpty(user.DisplayName, user.Username)
 	service.SaveAICallLog(request)

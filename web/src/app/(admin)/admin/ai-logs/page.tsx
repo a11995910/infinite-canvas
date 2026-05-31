@@ -1,10 +1,10 @@
 "use client";
 
 import { DeleteOutlined, EyeOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { App, Button, Card, Drawer, Flex, Form, Input, InputNumber, Table, Tag, Typography } from "antd";
+import { App, Button, Card, Flex, Form, Input, InputNumber, Modal, Space, Switch, Table, Tag, Typography } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
-import { deleteAdminAICallLogs, fetchAdminAICallLogs, type AdminAICallLog } from "@/services/api/admin";
+import { deleteAdminAICallLogs, fetchAdminAICallLogs, fetchAdminSettings, saveAdminSettings, type AdminAICallLog } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
 export default function AdminAICallLogsPage() {
@@ -18,7 +18,9 @@ export default function AdminAICallLogsPage() {
     const [loading, setLoading] = useState(false);
     const [clearDays, setClearDays] = useState(7);
     const [clearing, setClearing] = useState(false);
-    const [detail, setDetail] = useState<AdminAICallLog | null>(null);
+    const [detail, setDetail] = useState<{ title: string; value: string } | null>(null);
+    const [localDirectReportEnabled, setLocalDirectReportEnabled] = useState(false);
+    const [savingLocalDirectReport, setSavingLocalDirectReport] = useState(false);
 
     const loadLogs = async () => {
         if (!token) return;
@@ -38,6 +40,13 @@ export default function AdminAICallLogsPage() {
         void loadLogs();
     }, [token, page, pageSize]);
 
+    useEffect(() => {
+        if (!token) return;
+        fetchAdminSettings(token)
+            .then((settings) => setLocalDirectReportEnabled(settings.private.aiLog?.localDirectReportEnabled === true))
+            .catch(() => undefined);
+    }, [token]);
+
     const clearLogs = async () => {
         if (!token) return;
         setClearing(true);
@@ -50,6 +59,32 @@ export default function AdminAICallLogsPage() {
             message.error(error instanceof Error ? error.message : "清理 AI 调用日志失败");
         } finally {
             setClearing(false);
+        }
+    };
+
+    const updateLocalDirectReport = async (checked: boolean) => {
+        if (!token) return;
+        const previous = localDirectReportEnabled;
+        setLocalDirectReportEnabled(checked);
+        setSavingLocalDirectReport(true);
+        try {
+            const settings = await fetchAdminSettings(token);
+            await saveAdminSettings(token, {
+                ...settings,
+                private: {
+                    ...settings.private,
+                    aiLog: {
+                        ...settings.private.aiLog,
+                        localDirectReportEnabled: checked,
+                    },
+                },
+            });
+            message.success(checked ? "已开启本地直连日志上报" : "已关闭本地直连日志上报");
+        } catch (error) {
+            setLocalDirectReportEnabled(previous);
+            message.error(error instanceof Error ? error.message : "保存本地直连日志设置失败");
+        } finally {
+            setSavingLocalDirectReport(false);
         }
     };
 
@@ -66,12 +101,17 @@ export default function AdminAICallLogsPage() {
             {
                 title: "操作",
                 key: "actions",
-                width: 90,
+                width: 180,
                 fixed: "right" as const,
                 render: (_: unknown, item: AdminAICallLog) => (
-                    <Button size="small" icon={<EyeOutlined />} onClick={() => setDetail(item)}>
-                        详情
-                    </Button>
+                    <Space size={6}>
+                        <Button size="small" icon={<EyeOutlined />} onClick={() => setDetail({ title: "请求详情", value: item.requestBody })}>
+                            请求详情
+                        </Button>
+                        <Button size="small" icon={<EyeOutlined />} onClick={() => setDetail({ title: "返回详情", value: item.responseBody || item.error })}>
+                            返回详情
+                        </Button>
+                    </Space>
                 ),
             },
         ],
@@ -89,25 +129,24 @@ export default function AdminAICallLogsPage() {
                             void loadLogs();
                         }}
                     >
-                        <div className="grid gap-3 md:grid-cols-[minmax(0,360px)_auto_auto_minmax(0,180px)_auto] md:items-end">
-                            <Form.Item label="关键词" className="mb-0">
-                                <Input value={keyword} placeholder="搜索用户、模型、渠道、接口或错误" onChange={(event) => setKeyword(event.target.value)} />
-                            </Form.Item>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <Input className="min-w-[280px] flex-1 lg:max-w-[460px]" value={keyword} placeholder="搜索用户、模型、渠道、接口或错误" onChange={(event) => setKeyword(event.target.value)} />
                             <Button htmlType="submit" type="primary" icon={<SearchOutlined />}>
                                 查询
                             </Button>
                             <Button icon={<ReloadOutlined />} onClick={() => { setKeyword(""); setPage(1); void loadLogs(); }}>
                                 重置
                             </Button>
-                            <Form.Item label="清理范围" className="mb-0">
-                                <div className="flex items-center gap-2">
-                                    <InputNumber min={1} value={clearDays} className="!w-full" onChange={(value) => setClearDays(Number(value) || 7)} />
-                                    <Typography.Text type="secondary" className="shrink-0">
-                                        天前
-                                    </Typography.Text>
-                                </div>
-                            </Form.Item>
-                            <Button danger icon={<DeleteOutlined />} loading={clearing} onClick={() => void clearLogs()}>
+                            <div className="flex h-8 items-center gap-2 rounded-md border border-stone-200 px-3 dark:border-stone-800">
+                                <Typography.Text className="whitespace-nowrap text-sm">本地直连日志</Typography.Text>
+                                <Switch size="small" checked={localDirectReportEnabled} loading={savingLocalDirectReport} onChange={(checked) => void updateLocalDirectReport(checked)} />
+                            </div>
+                            <div className="flex h-8 items-center gap-2">
+                                <Typography.Text className="whitespace-nowrap text-sm">清理超过</Typography.Text>
+                                <InputNumber min={1} value={clearDays} className="!w-24" onChange={(value) => setClearDays(Number(value) || 7)} />
+                                <Typography.Text type="secondary" className="shrink-0">天前</Typography.Text>
+                            </div>
+                            <Button danger icon={<DeleteOutlined />} loading={clearing} onClick={() => void clearLogs()} className="ml-0 lg:ml-auto">
                                 清理旧日志
                             </Button>
                         </div>
@@ -120,7 +159,7 @@ export default function AdminAICallLogsPage() {
                         loading={loading}
                         columns={columns}
                         dataSource={logs}
-                        scroll={{ x: 1180 }}
+                        scroll={{ x: 1280 }}
                         pagination={{
                             current: page,
                             pageSize,
@@ -134,24 +173,16 @@ export default function AdminAICallLogsPage() {
                     />
                 </Card>
             </Flex>
-            <Drawer title="AI 调用详情" placement="right" size="large" open={Boolean(detail)} onClose={() => setDetail(null)}>
-                {detail ? (
-                    <Flex vertical gap={16} className="w-full">
-                        <LogBlock title="请求内容" value={detail.requestBody} />
-                        <LogBlock title="返回内容" value={detail.responseBody || detail.error} />
-                    </Flex>
-                ) : null}
-            </Drawer>
+            <Modal title={detail?.title || "AI 调用详情"} open={Boolean(detail)} width="min(1100px, 92vw)" footer={null} onCancel={() => setDetail(null)} destroyOnHidden>
+                <LogBlock value={detail?.value || ""} />
+            </Modal>
         </main>
     );
 }
 
-function LogBlock({ title, value }: { title: string; value: string }) {
+function LogBlock({ value }: { value: string }) {
     return (
-        <div>
-            <Typography.Text strong>{title}</Typography.Text>
-            <pre className="mt-2 max-h-[45vh] overflow-auto rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs leading-5 text-stone-700 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-200">{value || "-"}</pre>
-        </div>
+        <pre className="max-h-[72vh] whitespace-pre-wrap break-words overflow-auto rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs leading-5 text-stone-700 dark:border-stone-800 dark:bg-stone-950 dark:text-stone-200">{value || "-"}</pre>
     );
 }
 

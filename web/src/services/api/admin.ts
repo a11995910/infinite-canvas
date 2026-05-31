@@ -276,6 +276,7 @@ export type AdminPrivateSettings = {
         cron: string;
     };
     aiLog: {
+        localDirectReportEnabled: boolean;
         cleanup: {
             enabled: boolean;
             retentionDays: number;

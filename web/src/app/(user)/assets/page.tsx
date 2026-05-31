@@ -358,8 +358,8 @@ export default function AssetsPage() {
                                 </Typography.Text>
                                 <div className="mt-2 flex flex-wrap gap-1.5">
                                     {tags.length ? (
-                                        tags.map((tag) => (
-                                            <Tag key={tag} className="m-0">
+                                        tags.map((tag, index) => (
+                                            <Tag key={`${tag}-${index}`} className="m-0">
                                                 {tag}
                                             </Tag>
                                         ))
@@ -437,8 +437,8 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                         {summary}
                     </Typography.Paragraph>
                     <div className="mt-3 flex flex-wrap gap-1.5">
-                        {(asset.tags || []).slice(0, 3).map((tag) => (
-                            <Tag key={tag} className="m-0 text-[11px]">
+                        {(asset.tags || []).slice(0, 3).map((tag, index) => (
+                            <Tag key={`${tag}-${index}`} className="m-0 text-[11px]">
                                 {tag}
                             </Tag>
                         ))}
@@ -490,8 +490,8 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                         </Typography.Title>
                         <Space size={[4, 4]} wrap>
                             <Tag>{asset.kind === "image" ? "图片" : asset.kind === "video" ? "视频" : "文本"}</Tag>
-                            {(asset.tags || []).map((tag) => (
-                                <Tag key={tag}>{tag}</Tag>
+                            {(asset.tags || []).map((tag, index) => (
+                                <Tag key={`${tag}-${index}`}>{tag}</Tag>
                             ))}
                         </Space>
                     </div>

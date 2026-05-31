@@ -53,10 +53,10 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
                     <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-start">
                         <div className="pt-2 text-xs font-medium text-stone-500 dark:text-stone-400">标签</div>
                         <div className="flex flex-wrap gap-2">
-                            {promptTags.map((tag) => {
+                            {promptTags.map((tag, index) => {
                                 const active = tag === ALL_PROMPTS_OPTION ? selectedTags.length === 0 : selectedTags.includes(tag);
                                 return (
-                                    <Tag.CheckableTag key={tag} checked={active} className={cn("prompt-filter-tag", active && "is-active")} onChange={() => toggleTag(tag)}>
+                                    <Tag.CheckableTag key={`${tag}-${index}`} checked={active} className={cn("prompt-filter-tag", active && "is-active")} onChange={() => toggleTag(tag)}>
                                         {tag}
                                     </Tag.CheckableTag>
                                 );

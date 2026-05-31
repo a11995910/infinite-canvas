@@ -103,8 +103,8 @@ export default function AdminPromptsPage() {
             width: 180,
             render: (_, item) => (
                 <Space size={[4, 4]} wrap>
-                    {(item.tags || []).slice(0, 3).map((tag) => (
-                        <Tag key={tag}>{tag}</Tag>
+                    {(item.tags || []).slice(0, 3).map((tag, index) => (
+                        <Tag key={`${tag}-${index}`}>{tag}</Tag>
                     ))}
                 </Space>
             ),
@@ -243,8 +243,8 @@ export default function AdminPromptsPage() {
                                 </Typography.Title>
                                 <Space wrap>
                                     <Tag>{categoryName(detailPrompt.category)}</Tag>
-                                    {(detailPrompt.tags || []).map((tag) => (
-                                        <Tag key={tag}>{tag}</Tag>
+                                    {(detailPrompt.tags || []).map((tag, index) => (
+                                        <Tag key={`${tag}-${index}`}>{tag}</Tag>
                                     ))}
                                 </Space>
                             </Flex>

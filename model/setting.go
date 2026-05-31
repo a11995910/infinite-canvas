@@ -93,7 +93,8 @@ type PrivateSetting struct {
 }
 
 type AILogSetting struct {
-	Cleanup AILogCleanupSetting `json:"cleanup"`
+	LocalDirectReportEnabled *bool               `json:"localDirectReportEnabled"`
+	Cleanup                  AILogCleanupSetting `json:"cleanup"`
 }
 
 type AILogCleanupSetting struct {

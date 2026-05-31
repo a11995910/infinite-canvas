@@ -138,7 +138,7 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		setting.Channels = []model.ModelChannel{}
 	}
 	setting.PromptSync = normalizePromptSyncSetting(setting.PromptSync)
-	setting.AILog.Cleanup = normalizeAILogCleanupSetting(setting.AILog.Cleanup)
+	setting.AILog = normalizeAILogSetting(setting.AILog)
 	setting.Storage = normalizePrivateStorageSetting(setting.Storage)
 	for i := range setting.Channels {
 		if setting.Channels[i].Protocol == "" {
@@ -172,20 +172,23 @@ func DefaultSystemPrompts() model.SystemPromptSetting {
 1. 工作流必须面向同类型批量创作，变量字段要少而明确。
 2. 变量名使用 snake_case，label 使用中文。
 3. promptTemplate 必须使用 {{variable_name}} 引用变量。
-4. config 只输出必要配置，apiMode 可为 responses 或 images。
-5. inputVariables 支持 short_text、long_text、number、select、boolean。
-6. select 类型的 options 必须是字符串数组。
-7. 输出 JSON 结构：
+4. 如果用户需要“多张、系列、组图、文章配图、海报组、写真组、方案集”，mode 使用 multi_image_series；否则使用 single_image。
+5. config 只输出必要配置，apiMode 可为 responses 或 images。
+6. variables 支持 text、textarea、number、select、boolean。
+7. select 类型的 options 必须是字符串数组。
+8. 多图工作流必须输出 seriesConfig，用于先生成多条图片提示词草稿。
+9. 输出 JSON 结构：
 {
   "name": "工作流名称",
   "category": "分类",
   "description": "一句话描述",
-  "promptTemplate": "生成提示词模板",
-  "systemPrompt": "系统提示词，可空",
-  "inputVariables": [
-    {"key":"product_name","label":"产品名称","type":"short_text","required":true,"defaultValue":"","options":[]}
+  "mode": "single_image",
+  "variables": [
+    {"key":"product_name","label":"产品名称","type":"text","required":true,"defaultValue":"","options":[]}
   ],
   "config": {
+    "promptTemplate": "生成提示词模板",
+    "systemPrompt": "系统提示词，可空",
     "model": "",
     "apiMode": "responses",
     "size": "auto",
@@ -193,6 +196,12 @@ func DefaultSystemPrompts() model.SystemPromptSetting {
     "count": "1",
     "outputFormat": "png",
     "timeout": 600
+  },
+  "seriesConfig": {
+    "targetCount": "4",
+    "promptInstruction": "多图拆分规则，可空",
+    "reviewRequired": true,
+    "concurrency": "3"
   },
   "warnings": []
 }`,

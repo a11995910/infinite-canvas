@@ -143,9 +143,9 @@ export default function AssetLibraryPage() {
                                 >
                                     全部
                                 </Tag.CheckableTag>
-                                {availableTags.map((tag) => (
+                                {availableTags.map((tag, index) => (
                                     <Tag.CheckableTag
-                                        key={tag}
+                                        key={`${tag}-${index}`}
                                         checked={selectedTags.includes(tag)}
                                         className={cn("prompt-filter-tag", selectedTags.includes(tag) && "is-active")}
                                         onChange={() => {
@@ -190,8 +190,8 @@ export default function AssetLibraryPage() {
                             </Typography.Title>
                             <div className="flex flex-wrap gap-1.5">
                                 <Tag>{selectedAsset.type === "image" ? "图片" : "文本"}</Tag>
-                                {selectedAsset.tags.map((tag) => (
-                                    <Tag key={tag}>{tag}</Tag>
+                                {selectedAsset.tags.map((tag, index) => (
+                                    <Tag key={`${tag}-${index}`}>{tag}</Tag>
                                 ))}
                             </div>
                         </div>
@@ -251,8 +251,8 @@ function LibraryCard({ asset, onOpen, onAdd }: { asset: AssetLibraryItem; onOpen
                         {asset.type === "text" ? asset.content : asset.url}
                     </Typography.Paragraph>
                     <div className="mt-3 flex flex-wrap gap-1.5">
-                        {asset.tags.slice(0, 3).map((tag) => (
-                            <Tag key={tag} className="m-0 text-[11px]">
+                        {asset.tags.slice(0, 3).map((tag, index) => (
+                            <Tag key={`${tag}-${index}`} className="m-0 text-[11px]">
                                 {tag}
                             </Tag>
                         ))}

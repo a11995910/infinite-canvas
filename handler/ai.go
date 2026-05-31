@@ -149,7 +149,7 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 	defer response.Body.Close()
 
 	if response.StatusCode >= http.StatusBadRequest {
-		payload, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		payload, _ := io.ReadAll(io.LimitReader(response.Body, 256*1024))
 		log.Printf("AI upstream error: url=%s status=%d body=%s", request.URL.String(), response.StatusCode, strings.TrimSpace(string(payload)))
 		if onFailure != nil {
 			onFailure()

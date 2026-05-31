@@ -633,8 +633,8 @@ function createResponsesImageTool(config: AiConfig, params: ImageRequestParams, 
     return tool;
 }
 
-function createResponsesInput(prompt: string, inputImageDataUrls: string[]) {
-    const text = `${PROMPT_REWRITE_GUARD_PREFIX}\n${prompt}`;
+function createResponsesInput(config: AiConfig, prompt: string, inputImageDataUrls: string[]) {
+    const text = config.codexCli ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${prompt}` : prompt;
     if (!inputImageDataUrls.length) return text;
     return [
         {
@@ -654,7 +654,7 @@ async function requestResponsesSingle(config: AiConfig, prompt: string, inputIma
     const mime = MIME_MAP[params.outputFormat];
     const body: Record<string, unknown> = {
         model: config.model,
-        input: createResponsesInput(withSystemPrompt(config, prompt), inputImageDataUrls),
+        input: createResponsesInput(config, withSystemPrompt(config, prompt), inputImageDataUrls),
         tools: [createResponsesImageTool(config, params, inputImageDataUrls.length > 0)],
         tool_choice: "required",
     };

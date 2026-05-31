@@ -567,10 +567,26 @@ func normalizeWorkflowDraft(content string, scope string) (json.RawMessage, []st
 	}
 	draft["name"] = name
 	draft["scope"] = selectedScope
+	mode := strings.ToLower(strings.TrimSpace(fmt.Sprint(draft["mode"])))
+	if mode != "multi_image_series" {
+		mode = "single_image"
+	}
+	draft["mode"] = mode
 	draft["category"] = stringMapField(draft, "category")
 	draft["description"] = stringMapField(draft, "description")
-	draft["variables"] = normalizeDraftVariables(draft["variables"])
-	draft["config"] = normalizeDraftConfig(draft["config"])
+	variables := normalizeDraftVariables(draft["variables"])
+	if len(variables) == 0 {
+		variables = normalizeDraftVariables(draft["inputVariables"])
+	}
+	draft["variables"] = variables
+	config := normalizeDraftConfig(draft["config"])
+	for _, key := range []string{"promptTemplate", "systemPrompt", "negativePrompt"} {
+		if text := stringMapField(draft, key); text != "" && strings.TrimSpace(fmt.Sprint(config[key])) == "" {
+			config[key] = text
+		}
+	}
+	draft["config"] = config
+	draft["seriesConfig"] = normalizeDraftSeriesConfig(draft["seriesConfig"])
 	raw, _ := json.Marshal(draft)
 	return raw, warnings, nil
 }
@@ -608,6 +624,12 @@ func normalizeDraftVariables(value any) []map[string]any {
 			seen[key] = 1
 		}
 		typ := strings.ToLower(stringMapField(record, "type"))
+		switch typ {
+		case "short_text", "short-text":
+			typ = "text"
+		case "long_text", "long-text":
+			typ = "textarea"
+		}
 		if typ != "textarea" && typ != "number" && typ != "select" && typ != "boolean" {
 			typ = "text"
 		}
@@ -677,6 +699,27 @@ func normalizeDraftConfig(value any) map[string]any {
 		"streamPartialImages":   "1",
 		"responseFormatB64Json": true,
 		"codexCli":              false,
+	}
+	for key, fallback := range defaults {
+		if _, ok := config[key]; !ok {
+			config[key] = fallback
+		}
+	}
+	return config
+}
+
+func normalizeDraftSeriesConfig(value any) map[string]any {
+	config, _ := value.(map[string]any)
+	if config == nil {
+		config = map[string]any{}
+	}
+	defaults := map[string]any{
+		"targetCount":       "4",
+		"promptModel":       "",
+		"promptChannelId":   "",
+		"promptInstruction": "围绕同一主题拆分成封面图、核心信息图、场景图和总结图；每张图画面重点不同但视觉风格一致。",
+		"reviewRequired":    true,
+		"concurrency":       "3",
 	}
 	for key, fallback := range defaults {
 		if _, ok := config[key]; !ok {

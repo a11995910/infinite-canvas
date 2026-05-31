@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,12 +23,19 @@ import (
 )
 
 const (
-	aiLogTextLimit        = 64 * 1024
+	aiLogRequestTextLimit = 64 * 1024
+	aiLogErrorTextLimit   = 16 * 1024
+	aiLogScannerMax       = 16 * 1024 * 1024
 	defaultAILogCron      = "0 3 * * *"
 	defaultAILogRetention = 14
 )
 
 var (
+	htmlTagPattern        = regexp.MustCompile(`(?s)<[^>]+>`)
+	whitespacePattern     = regexp.MustCompile(`\s+`)
+	longDataURLPattern    = regexp.MustCompile(`data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]{512,}`)
+	longBase64TextPattern = regexp.MustCompile(`"[A-Za-z0-9+/=]{512,}"`)
+
 	aiLogCleanupCron *cron.Cron
 	aiLogCleanupOnce sync.Once
 	aiLogCleanupMu   sync.Mutex
@@ -49,6 +58,8 @@ type AICallLogInput struct {
 }
 
 func SaveAICallLog(input AICallLogInput) {
+	responseBody := normalizeAICallResponseLog(input.ResponseBody, input.Error)
+	errorText := normalizeAICallErrorLog(input.Error, input.ResponseBody)
 	item := model.AICallLog{
 		ID:              uuid.NewString(),
 		UserID:          strings.TrimSpace(input.UserID),
@@ -61,9 +72,9 @@ func SaveAICallLog(input AICallLogInput) {
 		Status:          input.Status,
 		DurationMs:      input.DurationMs,
 		Credits:         input.Credits,
-		RequestBody:     truncateLogText(input.RequestBody, aiLogTextLimit),
-		ResponseBody:    truncateLogText(input.ResponseBody, aiLogTextLimit),
-		Error:           truncateLogText(input.Error, 4096),
+		RequestBody:     truncateLogText(input.RequestBody, aiLogRequestTextLimit),
+		ResponseBody:    responseBody,
+		Error:           truncateLogText(errorText, aiLogErrorTextLimit),
 		CreatedAt:       now(),
 	}
 	if err := appendAICallLog(item); err != nil {
@@ -176,6 +187,25 @@ func normalizeAILogCleanupSetting(setting model.AILogCleanupSetting) model.AILog
 	return setting
 }
 
+func normalizeAILogSetting(setting model.AILogSetting) model.AILogSetting {
+	setting.Cleanup = normalizeAILogCleanupSetting(setting.Cleanup)
+	if setting.LocalDirectReportEnabled == nil {
+		enabled := false
+		setting.LocalDirectReportEnabled = &enabled
+	}
+	return setting
+}
+
+func LocalDirectAILogEnabled() bool {
+	settings, err := repository.GetSettings()
+	if err != nil {
+		log.Printf("load local direct ai log setting failed err=%v", err)
+		return false
+	}
+	setting := normalizeAILogSetting(settings.Private.AILog)
+	return setting.LocalDirectReportEnabled != nil && *setting.LocalDirectReportEnabled
+}
+
 func appendAICallLog(item model.AICallLog) error {
 	dir := strings.TrimSpace(config.Cfg.AILogDir)
 	if dir == "" {
@@ -222,7 +252,7 @@ func readAICallLogFile(filePath string) ([]model.AICallLog, error) {
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 512*1024)
+	scanner.Buffer(make([]byte, 64*1024), aiLogScannerMax)
 	items := []model.AICallLog{}
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -233,6 +263,8 @@ func readAICallLogFile(filePath string) ([]model.AICallLog, error) {
 		if err := json.Unmarshal([]byte(line), &item); err != nil {
 			continue
 		}
+		item.ResponseBody = normalizeAICallResponseLog(item.ResponseBody, item.Error)
+		item.Error = normalizeAICallErrorLog(item.Error, item.ResponseBody)
 		items = append(items, item)
 	}
 	return items, scanner.Err()
@@ -271,6 +303,250 @@ func aiLogMatchesKeyword(item model.AICallLog, keyword string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeAICallResponseLog(responseBody string, errorMessage string) string {
+	responseBody = strings.TrimSpace(responseBody)
+	if responseBody == "" {
+		return ""
+	}
+	formatted := formatAICallLogPayload(responseBody)
+	reason := extractAICallFailureReason(errorMessage)
+	if reason == "" {
+		reason = extractAICallFailureReason(responseBody)
+	}
+	if reason == "" {
+		return formatted
+	}
+	if strings.HasPrefix(formatted, "失败原因:") {
+		return formatted
+	}
+	return "失败原因: " + reason + "\n\n原始返回:\n" + formatted
+}
+
+func normalizeAICallErrorLog(errorMessage string, responseBody string) string {
+	if reason := extractAICallFailureReason(errorMessage); reason != "" {
+		return reason
+	}
+	if reason := extractAICallFailureReason(responseBody); reason != "" {
+		return reason
+	}
+	return cleanPlainLogText(errorMessage)
+}
+
+func formatAICallLogPayload(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err == nil {
+		redactLargeLogStrings(&payload)
+		if encoded, err := json.MarshalIndent(payload, "", "  "); err == nil {
+			return string(encoded)
+		}
+	}
+	if strings.Contains(raw, "\ndata:") || strings.HasPrefix(raw, "data:") || strings.Contains(raw, "\nevent:") || strings.HasPrefix(raw, "event:") {
+		return formatEventStreamLog(raw)
+	}
+	return redactLargePlainLogText(raw)
+}
+
+func formatEventStreamLog(raw string) string {
+	lines := strings.Split(raw, "\n")
+	formatted := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "data:") {
+			formatted = append(formatted, redactLargePlainLogText(line))
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+		if data == "" || data == "[DONE]" {
+			formatted = append(formatted, line)
+			continue
+		}
+		var payload any
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			formatted = append(formatted, redactLargePlainLogText(line))
+			continue
+		}
+		redactLargeLogStrings(&payload)
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			formatted = append(formatted, redactLargePlainLogText(line))
+			continue
+		}
+		formatted = append(formatted, "data: "+string(encoded))
+	}
+	return strings.TrimSpace(strings.Join(formatted, "\n"))
+}
+
+func extractAICallFailureReason(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err == nil {
+		reasons := []string{}
+		collectAICallFailureReasons(payload, &reasons)
+		return strings.Join(dedupeStrings(reasons), "；")
+	}
+	cleaned := cleanPlainLogText(raw)
+	if cleaned == "" || looksLikeSuccessfulLogText(cleaned) {
+		return ""
+	}
+	return cleaned
+}
+
+func collectAICallFailureReasons(value any, reasons *[]string) {
+	switch typed := value.(type) {
+	case map[string]any:
+		if message := stringField(typed, "message"); message != "" {
+			*reasons = append(*reasons, message)
+		}
+		if message := stringField(typed, "msg"); message != "" {
+			*reasons = append(*reasons, message)
+		}
+		if detail := stringField(typed, "detail"); detail != "" {
+			*reasons = append(*reasons, detail)
+		}
+		if reason := stringField(typed, "reason"); reason != "" {
+			*reasons = append(*reasons, reason)
+		}
+		if errValue, ok := typed["error"]; ok && errValue != nil {
+			if message, ok := errValue.(string); ok && strings.TrimSpace(message) != "" {
+				*reasons = append(*reasons, strings.TrimSpace(message))
+			} else {
+				collectAICallFailureReasons(errValue, reasons)
+			}
+		}
+		status := strings.ToLower(stringField(typed, "status"))
+		typeName := stringField(typed, "type")
+		if status == "failed" || status == "incomplete" || status == "cancelled" || status == "canceled" {
+			if typeName == "image_generation_call" {
+				*reasons = append(*reasons, "Responses 图像生成调用失败：image_generation_call 状态为 "+status+"，接口未返回具体错误原因")
+			} else if typeName != "" {
+				*reasons = append(*reasons, typeName+" 状态为 "+status)
+			} else {
+				*reasons = append(*reasons, "状态为 "+status)
+			}
+		}
+		for key, item := range typed {
+			if key == "instructions" || key == "prompt" || key == "requestBody" || key == "responseBody" {
+				continue
+			}
+			collectAICallFailureReasons(item, reasons)
+		}
+	case []any:
+		for _, item := range typed {
+			collectAICallFailureReasons(item, reasons)
+		}
+	}
+}
+
+func stringField(values map[string]any, key string) string {
+	value, ok := values[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		if typed == float64(int64(typed)) {
+			return strconv.FormatInt(int64(typed), 10)
+		}
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	default:
+		return ""
+	}
+}
+
+func dedupeStrings(values []string) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, value := range values {
+		value = cleanPlainLogText(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func cleanPlainLogText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = longDataURLPattern.ReplaceAllString(value, "[redacted image data]")
+	value = longBase64TextPattern.ReplaceAllString(value, `"[redacted large base64/string]"`)
+	value = html.UnescapeString(htmlTagPattern.ReplaceAllString(value, " "))
+	value = whitespacePattern.ReplaceAllString(value, " ")
+	value = strings.TrimSpace(value)
+	if len(value) > aiLogErrorTextLimit {
+		return value[:aiLogErrorTextLimit] + "\n... [truncated]"
+	}
+	return value
+}
+
+func redactLargePlainLogText(value string) string {
+	value = longDataURLPattern.ReplaceAllString(value, "[redacted image data]")
+	value = longBase64TextPattern.ReplaceAllString(value, `"[redacted large base64/string]"`)
+	return strings.TrimSpace(value)
+}
+
+func redactLargeLogStrings(value *any) {
+	switch typed := (*value).(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if text, ok := item.(string); ok && isLargeLogString(text) {
+				typed[key] = fmt.Sprintf("[redacted large string len=%d]", len(text))
+				continue
+			}
+			redactLargeLogStrings(&item)
+			typed[key] = item
+		}
+	case []any:
+		for index, item := range typed {
+			redactLargeLogStrings(&item)
+			typed[index] = item
+		}
+	}
+}
+
+func isLargeLogString(value string) bool {
+	if strings.HasPrefix(value, "data:image/") {
+		return true
+	}
+	return len(value) > 4096 && looksLikeLogBase64(value)
+}
+
+func looksLikeLogBase64(value string) bool {
+	for _, char := range value[:min(len(value), 256)] {
+		if !(char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '+' || char == '/' || char == '=') {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeSuccessfulLogText(value string) bool {
+	lower := strings.ToLower(value)
+	return !strings.Contains(lower, "error") &&
+		!strings.Contains(lower, "failed") &&
+		!strings.Contains(lower, "fail") &&
+		!strings.Contains(lower, "timeout") &&
+		!strings.Contains(lower, "stream_read_error") &&
+		!strings.Contains(lower, "502") &&
+		!strings.Contains(lower, "500") &&
+		!strings.Contains(lower, "429") &&
+		!strings.Contains(lower, "401") &&
+		!strings.Contains(lower, "403")
 }
 
 func truncateLogText(value string, limit int) string {
