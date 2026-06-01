@@ -4,7 +4,7 @@
 
 <h1 align="center">无限画布 (infinite-canvas)</h1>
 
-无限画布是一款面向图片创作的开源工作台。本仓库是基于 [basketikun/infinite-canvas](https://github.com/basketikun/infinite-canvas) 二次开发的版本，重点增强了生图工作台、创作工作流、账号同步、S3/R2 对象存储和部署文档，适合个人服务器或小团队自托管使用。
+无限画布是一款面向图片和视频创作的开源工作台。本仓库是基于 [basketikun/infinite-canvas](https://github.com/basketikun/infinite-canvas) 二次开发的版本，重点增强了生图工作台、视频创作台、创作工作流、账号同步、S3/R2 对象存储和部署文档，适合个人服务器或小团队自托管使用。
 
 > [!CAUTION]
 > 项目目前处于开发阶段，不保证历史数据兼容。各种数据库结构和存储格式都可能直接调整，欢迎关注后续更新，当前更适合个人/本地部署，不建议直接公网多人共用。
@@ -14,12 +14,13 @@
 ## 核心功能
 
 - 无限画布：多画布项目、节点拖拽缩放、连线、小地图、撤销重做、导入导出。
-- AI 创作：支持 OpenAI 兼容接口的 Images API、Responses API、图生图、参考图编辑、流式接收、Base64 图片返回和文本问答。
+- AI 创作：支持 OpenAI 兼容接口的 Images API、Responses API、图生图、参考图编辑、视频生成、流式接收、Base64 图片返回和文本问答。
 - 生图工作台：支持侧边/悬浮底部工作台、多任务并发、历史结果合并展示、分类管理、失败详情、参考图缩略图和“我的素材”复用。
+- 视频创作台：支持 Agnes-Video-V2.0 文生视频/图生视频、多任务并发、参考图、历史同步、云端存储同步和本地下载。
 - 创作工作流：支持公开/个人模板、变量表单、AI 创建工作流、单图/多图系列工作流、参考图输入和结果自动进入生图历史。
 - 画布助手：围绕选中节点和上游节点对话、生图，并把结果插回画布。
 - 提示词与素材：提示词库、服务器素材库和“我的素材”可在生图、画布 AI 和工作流中复用。
-- 存储：保留浏览器 IndexedDB，本版本新增 SQLite 元数据 + S3/R2 图片对象存储，可配置 Cloudflare R2。
+- 存储：保留浏览器 IndexedDB，本版本新增 SQLite 元数据 + S3/R2 图片和视频对象存储，可配置 Cloudflare R2。
 
 完整功能说明见 [docs/features.md](docs/features.md)。
 
@@ -119,10 +120,10 @@ npm run dev
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=basketikun%2Finfinite-canvas&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=HuFakai%2Finfinite-canvas&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=basketikun/infinite-canvas&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=basketikun/infinite-canvas&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=basketikun/infinite-canvas&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=HuFakai/infinite-canvas&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=HuFakai/infinite-canvas&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=HuFakai/infinite-canvas&type=date&legend=top-left" />
  </picture>
 </a>

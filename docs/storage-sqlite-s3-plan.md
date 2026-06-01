@@ -16,9 +16,9 @@
 - `storage_objects` 表保存已上传文件索引。
 - 管理员 S3/R2 配置保存在 `settings.private.storage.providers`，暂未拆出独立 `storage_providers` 表。
 - 用户自定义 S3/R2 配置保存在 `user_configs.storage_provider`，由前端配置弹窗手动同步到账号。
-- 画布数据保存在 `user_configs.canvas_data` 快照，生图历史保存在 `user_configs.image_history` 快照。
+- 画布数据保存在 `user_configs.canvas_data` 快照，生图历史保存在 `user_configs.image_history` 快照，视频历史保存在 `user_configs.video_history` 快照。
 - 工作流模板保存在 `creative_workflows` 表，支持个人/公开范围。
-- 删除图片时会删除对象存储文件和 `storage_objects` 记录；素材或生成结果作为参考图使用时不会重复上传。
+- 删除图片或已同步到对象存储的视频时会删除对象存储文件和 `storage_objects` 记录；素材或生成结果作为参考图使用时不会重复上传。
 
 后续如果需要多人高并发、精细审计或增量同步，再按下方规划拆分更多业务表。
 

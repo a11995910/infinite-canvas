@@ -234,7 +234,7 @@
 
 ### user_configs
 
-用户配置表。用于把用户模型配置、用户 S3/R2 配置、画布数据和生图历史跟随账号同步。
+用户配置表。用于把用户模型配置、用户 S3/R2 配置、画布数据、生图历史和视频历史跟随账号同步。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -243,6 +243,7 @@
 | `storage_provider` | text | 用户自定义 S3/R2 配置 JSON |
 | `canvas_data` | text | 用户画布数据快照 JSON |
 | `image_history` | text | 用户生图历史和分类快照 JSON |
+| `video_history` | text | 用户视频生成历史快照 JSON |
 | `created_at` | string | 创建时间 |
 | `updated_at` | string | 更新时间 |
 

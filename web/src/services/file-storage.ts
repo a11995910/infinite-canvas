@@ -3,10 +3,15 @@
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 
+import { apiGet } from "@/services/api/request";
+import { loadUserStorageProvider, type UserStorageProvider } from "@/services/image-storage";
+import { useUserStore } from "@/stores/use-user-store";
+
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" });
 const objectUrls = new Map<string, string>();
+let storageConfigPromise: Promise<{ mode: string; allowUserProvider: boolean }> | null = null;
 
 export async function uploadMediaFile(input: string | Blob, prefix = "file"): Promise<UploadedFile> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
@@ -16,6 +21,56 @@ export async function uploadMediaFile(input: string | Blob, prefix = "file"): Pr
     objectUrls.set(storageKey, url);
     const meta = blob.type.startsWith("video/") ? await readVideoMeta(url) : {};
     return { url, storageKey, bytes: blob.size, mimeType: blob.type || "application/octet-stream", ...meta };
+}
+
+export async function downloadRemoteMedia(url: string) {
+    const response = await fetch(proxiedMediaUrl(url));
+    if (!response.ok) throw new Error(`视频下载失败：${response.status}`);
+    const blob = await response.blob();
+    if (blob.type.includes("json") || blob.type.startsWith("text/")) {
+        const text = await blob.text().catch(() => "");
+        let message = "";
+        try {
+            const payload = JSON.parse(text) as { msg?: string; message?: string };
+            message = payload.msg || payload.message || "";
+        } catch {
+            message = text;
+        }
+        throw new Error(message || "视频下载失败");
+    }
+    return blob;
+}
+
+export async function uploadRemoteMediaToServer(url: string, filename: string): Promise<UploadedFile> {
+    const blob = await downloadRemoteMedia(url);
+    return uploadMediaBlobToServer(blob, filename);
+}
+
+async function uploadMediaBlobToServer(blob: Blob, filename: string): Promise<UploadedFile> {
+    const config = await loadStorageConfig().catch(() => null);
+    const userProvider = config?.allowUserProvider ? loadUserStorageProvider() : null;
+    if (!config || (config.mode !== "server_sqlite_s3" && config.mode !== "hybrid" && !userProvider)) throw new Error("服务端对象存储未启用");
+    const token = useUserStore.getState().token;
+    if (!token) throw new Error("请先登录后再同步视频");
+    const formData = new FormData();
+    formData.append("file", blob, filename);
+    if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
+    const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
+    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedFile } | null;
+    if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "视频同步失败");
+    const meta = payload.data.mimeType?.startsWith("video/") ? await readVideoMeta(payload.data.url) : {};
+    return { ...payload.data, bytes: payload.data.bytes || blob.size, mimeType: payload.data.mimeType || blob.type || "video/mp4", ...meta };
+}
+
+async function loadStorageConfig() {
+    storageConfigPromise ||= apiGet<{ mode: string; allowUserProvider: boolean }>("/api/storage/config");
+    return storageConfigPromise;
+}
+
+function proxiedMediaUrl(url: string) {
+    if (!url.startsWith("http://") && !url.startsWith("https://")) return url;
+    if (typeof window !== "undefined" && url.includes(window.location.host)) return url;
+    return `/api/proxy-image?url=${encodeURIComponent(url)}`;
 }
 
 export async function resolveMediaUrl(storageKey?: string, fallback = "") {
@@ -75,4 +130,18 @@ function readVideoMeta(url: string) {
         video.onerror = done;
         video.src = url;
     });
+}
+
+function toProviderPayload(provider: UserStorageProvider) {
+    return {
+        name: provider.name,
+        type: provider.type || "s3",
+        endpoint: provider.endpoint,
+        region: provider.region || "auto",
+        bucket: provider.bucket,
+        accessKeyId: provider.accessKeyId,
+        secretAccessKey: provider.secretAccessKey,
+        publicBaseUrl: provider.publicBaseUrl,
+        pathPrefix: provider.pathPrefix,
+    };
 }

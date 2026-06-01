@@ -35,6 +35,7 @@ export type AiConfig = {
     responseFormatB64Json: boolean;
     codexCli: boolean;
     videoSeconds: string;
+    videoCount: string;
     vquality: string;
     systemPrompt: string;
     systemPrompts: {
@@ -70,7 +71,7 @@ export const defaultConfig: AiConfig = {
     apiMode: "images",
     model: "gpt-image-2",
     imageModel: "gpt-image-2",
-    videoModel: "grok-imagine-video",
+    videoModel: "Agnes-Video-V2.0",
     textModel: "gpt-5.5",
     timeout: "600",
     streamImages: false,
@@ -78,6 +79,7 @@ export const defaultConfig: AiConfig = {
     responseFormatB64Json: true,
     codexCli: false,
     videoSeconds: "6",
+    videoCount: "1",
     vquality: "720",
     systemPrompt: "",
     systemPrompts: { image: "", video: "", text: "", workflow: "", workflowAgent: "" },
@@ -215,7 +217,7 @@ export const useConfigStore = create<ConfigStore>()(
                         channelMode: config.channelMode || "remote",
                         apiMode: config.apiMode === "responses" ? "responses" : "images",
                         imageModel: config.imageModel || config.model,
-                        videoModel: config.videoModel || "grok-imagine-video",
+                        videoModel: config.videoModel || "Agnes-Video-V2.0",
                         textModel: config.textModel || config.model,
                         timeout: config.timeout || "600",
                         streamPartialImages: config.streamPartialImages || "1",
@@ -224,6 +226,7 @@ export const useConfigStore = create<ConfigStore>()(
                         outputCompression: config.outputCompression || "100",
                         moderation: config.moderation === "low" ? "low" : "auto",
                         videoSeconds: config.videoSeconds || "6",
+                        videoCount: config.videoCount || "1",
                         vquality: config.vquality || "720",
                         systemPrompts: { ...defaultConfig.systemPrompts, ...(config.systemPrompts || {}) },
                         syncModelConfig: config.syncModelConfig === true,

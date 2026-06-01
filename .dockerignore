@@ -2,6 +2,7 @@
 .idea
 docs
 data
+data_副本
 web/.next
 web/node_modules
 web/out

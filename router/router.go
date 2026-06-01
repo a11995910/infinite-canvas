@@ -23,6 +23,7 @@ func New() *gin.Engine {
 	api.GET("/auth/me", middleware.OptionalAuth, gin.WrapF(handler.CurrentUser))
 	api.GET("/settings", gin.WrapF(handler.Settings))
 	api.GET("/storage/config", gin.WrapF(handler.StorageConfig))
+	api.GET("/proxy-image", gin.WrapF(handler.ProxyImage))
 	api.GET("/files/:id", func(c *gin.Context) {
 		handler.FileInfo(c.Writer, c.Request, c.Param("id"))
 	})
@@ -46,6 +47,8 @@ func New() *gin.Engine {
 	v1.POST("/user-data/canvas", gin.WrapF(handler.SaveUserCanvasData))
 	v1.GET("/user-data/image-history", gin.WrapF(handler.UserImageHistory))
 	v1.POST("/user-data/image-history", gin.WrapF(handler.SaveUserImageHistory))
+	v1.GET("/user-data/video-history", gin.WrapF(handler.UserVideoHistory))
+	v1.POST("/user-data/video-history", gin.WrapF(handler.SaveUserVideoHistory))
 	v1.GET("/user-data/assets", gin.WrapF(handler.UserAssetData))
 	v1.POST("/user-data/assets", gin.WrapF(handler.SaveUserAssetData))
 	v1.POST("/ai-logs", gin.WrapF(handler.ClientAICallLog))

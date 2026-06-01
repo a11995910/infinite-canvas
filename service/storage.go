@@ -57,6 +57,7 @@ type UserConfigPayload struct {
 	StorageProvider  *StorageObjectProviderInput `json:"storageProvider,omitempty"`
 	CanvasData       json.RawMessage             `json:"canvasData,omitempty"`
 	ImageHistory     json.RawMessage             `json:"imageHistory,omitempty"`
+	VideoHistory     json.RawMessage             `json:"videoHistory,omitempty"`
 	AssetData        json.RawMessage             `json:"assetData,omitempty"`
 	SyncCapabilities map[string]bool             `json:"syncCapabilities,omitempty"`
 }
@@ -154,6 +155,9 @@ func CurrentUserConfig(ctx context.Context) (UserConfigPayload, error) {
 	if strings.TrimSpace(config.ImageHistory) != "" {
 		result.ImageHistory = json.RawMessage(config.ImageHistory)
 	}
+	if strings.TrimSpace(config.VideoHistory) != "" {
+		result.VideoHistory = json.RawMessage(config.VideoHistory)
+	}
 	if strings.TrimSpace(config.AssetData) != "" {
 		result.AssetData = json.RawMessage(config.AssetData)
 	}
@@ -222,6 +226,27 @@ func SaveCurrentUserImageHistory(ctx context.Context, raw json.RawMessage) (json
 		return nil, err
 	}
 	return json.RawMessage(config.ImageHistory), nil
+}
+
+func CurrentUserVideoHistory(ctx context.Context) (json.RawMessage, error) {
+	config, err := currentUserConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(config.VideoHistory) == "" {
+		return json.RawMessage(`{"logs":[]}`), nil
+	}
+	return json.RawMessage(config.VideoHistory), nil
+}
+
+func SaveCurrentUserVideoHistory(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+	config, err := saveCurrentUserConfigField(ctx, func(config *model.UserConfig) {
+		config.VideoHistory = string(raw)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(config.VideoHistory), nil
 }
 
 func CurrentUserAssetData(ctx context.Context) (json.RawMessage, error) {
@@ -1029,7 +1054,6 @@ func DownloadStorageObject(id string) (DownloadedStorageObject, error) {
 
 	return DownloadedStorageObject{}, errors.New("无法读取对象存储文件")
 }
-
 
 func selectStorageProvider(storage model.PrivateStorageSetting) (model.StorageProvider, error) {
 	var candidates []model.StorageProvider

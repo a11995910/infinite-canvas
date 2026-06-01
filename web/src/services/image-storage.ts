@@ -35,16 +35,27 @@ const serverUrls = new Map<string, string>();
 export const USER_STORAGE_PROVIDER_KEY = "infinite-canvas:user_storage_provider";
 let storageConfigPromise: Promise<{ mode: string; allowUserProvider: boolean }> | null = null;
 
+function getProxyUrl(url: string): string {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+        if (typeof window !== "undefined" && url.includes(window.location.host)) {
+            return url;
+        }
+        return `/api/proxy-image?url=${encodeURIComponent(url)}`;
+    }
+    return url;
+}
+
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
-    const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
+    const url = typeof input === "string" ? getProxyUrl(input) : input;
+    const blob = typeof url === "string" ? await (await fetch(url)).blob() : url;
     const serverUpload = await maybeUploadImageToServer(blob);
     if (serverUpload) return serverUpload;
     const storageKey = `image:${nanoid()}`;
     await store.setItem(storageKey, blob);
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
-    const meta = await readImageMeta(url);
-    return { url, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
+    const urlObj = URL.createObjectURL(blob);
+    objectUrls.set(storageKey, urlObj);
+    const meta = await readImageMeta(urlObj);
+    return { url: urlObj, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
 }
 
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
@@ -128,7 +139,8 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
     for (const url of urls) {
         if (url.startsWith("data:")) return url;
         try {
-            const response = await fetch(url);
+            const proxyUrl = getProxyUrl(url);
+            const response = await fetch(proxyUrl);
             if (!response.ok) {
                 lastError = `读取参考图失败：${response.status}`;
                 continue;

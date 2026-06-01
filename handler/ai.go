@@ -49,7 +49,7 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 	user, _ := service.UserFromContext(r.Context())
 	modelName := r.URL.Query().Get("model")
 	if strings.TrimSpace(modelName) == "" {
-		modelName = "grok-imagine-video"
+		modelName = "Agnes-Video-V2.0"
 	}
 	channel, err := service.SelectModelChannelForModel(modelName, r.Header.Get("X-Model-Channel-ID"))
 	if err != nil {
@@ -155,7 +155,7 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 			onFailure()
 		}
 		saveAIProxyLog(logContext, response.StatusCode, string(payload), strings.TrimSpace(string(payload)))
-		Fail(w, "AI 接口请求失败")
+		Fail(w, readUpstreamAIErrorMessage(payload, response.StatusCode))
 		return
 	}
 
@@ -267,6 +267,31 @@ func summarizeMultipartAIRequest(body []byte, contentType string) string {
 	summary["files"] = files
 	encoded, _ := json.MarshalIndent(summary, "", "  ")
 	return string(encoded)
+}
+
+func readUpstreamAIErrorMessage(body []byte, statusCode int) string {
+	var payload struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Msg     string `json:"msg"`
+		Message string `json:"message"`
+	}
+	if len(body) > 0 && json.Unmarshal(body, &payload) == nil {
+		if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
+			return payload.Error.Message
+		}
+		if strings.TrimSpace(payload.Msg) != "" {
+			return payload.Msg
+		}
+		if strings.TrimSpace(payload.Message) != "" {
+			return payload.Message
+		}
+	}
+	if statusCode > 0 {
+		return fmt.Sprintf("AI 接口请求失败：%d", statusCode)
+	}
+	return "AI 接口请求失败"
 }
 
 func redactLargeImages(value *any) {

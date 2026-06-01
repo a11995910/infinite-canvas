@@ -1,7 +1,7 @@
 import axios from "axios";
 
 import { dataUrlToFile } from "@/lib/image-utils";
-import { imageToDataUrl } from "@/services/image-storage";
+import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -721,6 +721,9 @@ async function requestImages(config: AiConfig, prompt: string, references: Refer
         const firstError = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
         throw firstError?.reason || new Error("所有并发请求均失败");
     }
+    if (references.length && isAgnesImageModel(config.model)) {
+        return requestAgnesImageEdit(config, prompt, references, params);
+    }
     if (config.apiMode === "responses") return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
     return references.length ? requestImageEditSingle(config, prompt, references, params) : requestImageGenerationSingle(config, prompt, params);
 }
@@ -826,4 +829,82 @@ export async function fetchImageModels(config: AiConfig) {
     } catch (error) {
         throw new Error(readAxiosError(error, "读取模型失败"));
     }
+}
+
+function isAgnesImageModel(model: string) {
+    const m = model.toLowerCase();
+    return m === "agnes-image-2.1-flash" || m === "agnes-image-2.0-flash";
+}
+
+function publicHttpUrl(value?: string) {
+    if (!value || value.startsWith("blob:") || value.startsWith("data:")) return "";
+    try {
+        const url = new URL(value, typeof window === "undefined" ? undefined : window.location.origin);
+        if (!["http:", "https:"].includes(url.protocol)) return "";
+        if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return "";
+        return url.href;
+    } catch {
+        return "";
+    }
+}
+
+async function requestAgnesImageEdit(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams): Promise<GeneratedImage[]> {
+    const mime = MIME_MAP[params.outputFormat];
+
+    // 获取参考图的公共 HTTP 链接或降级为 base64
+    const resolvedUrl = await resolveImageUrl(references[0].storageKey, "");
+    let imageUrl = "";
+    for (const url of [references[0].dataUrl, references[0].url, resolvedUrl]) {
+        const publicUrl = publicHttpUrl(url);
+        if (publicUrl) {
+            imageUrl = publicUrl;
+            break;
+        }
+    }
+    if (!imageUrl) {
+        imageUrl = await imageToDataUrl(references[0]);
+    }
+
+    const body: Record<string, unknown> = {
+        model: config.model,
+        prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+        output_format: params.outputFormat,
+        moderation: params.moderation,
+        image: imageUrl, // 核心参数：根据文档，参考图使用 image 字段，支持公开 URL 或 Base64 DataURL
+    };
+    if (params.n > 1) body.n = params.n;
+    if (params.size) body.size = params.size;
+    if (params.quality && !config.codexCli) body.quality = params.quality;
+    if (params.outputFormat !== "png") body.output_compression = params.outputCompression;
+    if (config.responseFormatB64Json) body.response_format = "b64_json";
+    if (config.streamImages) {
+        body.stream = true;
+        body.partial_images = params.streamPartialImages;
+    }
+
+    return requestAndParseImages(
+        config,
+        "/images/generations", // 核心修改：官方图生图使用 /images/generations 接口而非 /images/edits
+        body,
+        params.timeoutSeconds,
+        () =>
+            requestWithTransientRetry(() =>
+                withTimeout(params.timeoutSeconds, (signal) =>
+                    fetch(aiApiUrl(config, "/images/generations"), {
+                        method: "POST",
+                        headers: aiHeaders(config, "application/json"),
+                        body: JSON.stringify(body),
+                        signal,
+                    }),
+                ),
+            ),
+        async (response) => {
+            if (config.streamImages && isEventStreamResponse(response)) {
+                const images = await parseImagesStreamResponse(response, mime);
+                return { images, responseBody: summarizeGeneratedImages(images, "event-stream") };
+            }
+            const payload = (await response.json()) as ImageApiResponse;
+            return { images: parseImagePayload(payload, mime), responseBody: stringifyLogPayload(payload) };
+        },
+    );
 }
