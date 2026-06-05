@@ -52,7 +52,7 @@ export function verifySub2APIProxyTarget(target: string, expires: string | null,
 }
 
 export function buildSub2APIProxyBaseUrl(request: NextRequest, signed: { target: string; expires: number; signature: string }) {
-    return `${request.nextUrl.origin}/api/sub2api/proxy/${signed.target}/${signed.expires}/${signed.signature}`;
+    return `${publicRequestOrigin(request)}/api/sub2api/proxy/${signed.target}/${signed.expires}/${signed.signature}`;
 }
 
 export function proxyRequestHeaders(request: NextRequest) {
@@ -96,6 +96,14 @@ function decodeTarget(target: string) {
     } catch {
         throw new Error("Sub2API 代理目标不正确");
     }
+}
+
+function publicRequestOrigin(request: NextRequest) {
+    const forwardedHost = request.headers.get("x-forwarded-host") || request.headers.get("host") || request.nextUrl.host;
+    const forwardedProto = request.headers.get("x-forwarded-proto") || request.nextUrl.protocol.replace(":", "");
+    const protocol = forwardedProto.split(",")[0]?.trim() === "https" ? "https" : "http";
+    const host = forwardedHost.split(",")[0]?.trim();
+    return host ? `${protocol}://${host}` : request.nextUrl.origin;
 }
 
 function signatureFor(origin: string, expires: number) {
