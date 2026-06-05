@@ -55,6 +55,15 @@ export function buildSub2APIProxyBaseUrl(request: NextRequest, signed: { target:
     return `${publicRequestOrigin(request)}/api/sub2api/proxy/${signed.target}/${signed.expires}/${signed.signature}`;
 }
 
+export function backendAPIBaseUrl() {
+    return (process.env.API_BASE_URL || "http://127.0.0.1:18080").replace(/\/$/, "") + "/api";
+}
+
+export function readBearerToken(request: NextRequest) {
+    const header = request.headers.get("authorization") || "";
+    return header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
+}
+
 export function proxyRequestHeaders(request: NextRequest) {
     const headers = new Headers(request.headers);
     headers.delete("host");
@@ -110,8 +119,18 @@ function signatureFor(origin: string, expires: number) {
     return createHmac("sha256", proxySecret()).update(`${origin}:${expires}`).digest("base64url");
 }
 
+export function sub2APIEmbedSecret() {
+    const embedSecret = (process.env.SUB2API_EMBED_PROXY_SECRET || "").trim();
+    if (embedSecret) return embedSecret;
+    const jwtSecret = (process.env.JWT_SECRET || "").trim();
+    if (jwtSecret && jwtSecret !== "infinite-canvas") return jwtSecret;
+    return "";
+}
+
 function proxySecret() {
-    return process.env.SUB2API_EMBED_PROXY_SECRET || process.env.JWT_SECRET || "infinite-canvas-sub2api-embed";
+    const secret = sub2APIEmbedSecret();
+    if (!secret) throw new Error("Sub2API 嵌入密钥未配置");
+    return secret;
 }
 
 function signatureTTLSeconds() {

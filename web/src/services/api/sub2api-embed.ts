@@ -1,4 +1,5 @@
 import { chooseSub2APIKey, type Sub2APIEmbedConfig, type Sub2APIEmbedKey } from "@/lib/sub2api-embed";
+import type { AuthSession } from "@/services/api/auth";
 
 type Sub2APIEmbedKeysResponse = {
     sourceOrigin: string;
@@ -17,4 +18,15 @@ export async function fetchSub2APIEmbedConfig(params: { token: string; srcHost: 
     const selectedKey = chooseSub2APIKey(data.keys || []);
     if (!selectedKey) throw new Error("当前账号没有可用的 Sub2API Key");
     return { sourceOrigin: data.sourceOrigin, proxyBaseUrl: data.proxyBaseUrl, selectedKey, keys: data.keys || [] };
+}
+
+export async function fetchSub2APIEmbedSession(params: { token: string; srcHost: string }): Promise<AuthSession> {
+    const query = new URLSearchParams({ src_host: params.srcHost });
+    const response = await fetch(`/api/sub2api/session?${query.toString()}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${params.token}` },
+    });
+    const payload = (await response.json().catch(() => null)) as AuthSession | { message?: string } | null;
+    if (!response.ok) throw new Error((payload && "message" in payload && payload.message) || "Sub2API 嵌入登录失败");
+    return payload as AuthSession;
 }

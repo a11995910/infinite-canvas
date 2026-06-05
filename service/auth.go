@@ -2,7 +2,10 @@ package service
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -29,7 +33,25 @@ type TokenClaims struct {
 }
 
 type userExtra struct {
-	LinuxDo any `json:"linuxDo,omitempty"`
+	LinuxDo any              `json:"linuxDo,omitempty"`
+	Sub2API *sub2APIUserInfo `json:"sub2api,omitempty"`
+}
+
+type sub2APIUserInfo struct {
+	SourceOrigin string `json:"sourceOrigin"`
+	UserID       string `json:"userId"`
+	Email        string `json:"email,omitempty"`
+	Username     string `json:"username,omitempty"`
+	UpdatedAt    string `json:"updatedAt"`
+}
+
+type Sub2APIEmbedLoginInput struct {
+	SourceOrigin string
+	UserID       string
+	Email        string
+	Username     string
+	DisplayName  string
+	AvatarURL    string
 }
 
 func EnsureDefaultAdmin() error {
@@ -114,6 +136,56 @@ func Login(username string, password string) (model.AuthSession, error) {
 	normalizeUserDefaults(&user)
 	user.LastLoginAt = now()
 	user.UpdatedAt = now()
+	user, err = repository.SaveUser(user)
+	if err != nil {
+		return model.AuthSession{}, err
+	}
+	return newSession(user)
+}
+
+func ValidateSub2APIEmbedSecret(secret string) bool {
+	expected := sub2APIEmbedSecret()
+	secret = strings.TrimSpace(secret)
+	if expected == "" || secret == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(secret), []byte(expected)) == 1
+}
+
+func LoginWithSub2APIEmbed(input Sub2APIEmbedLoginInput) (model.AuthSession, error) {
+	input.SourceOrigin = strings.TrimSpace(input.SourceOrigin)
+	input.UserID = strings.TrimSpace(input.UserID)
+	if input.SourceOrigin == "" || input.UserID == "" {
+		return model.AuthSession{}, safeMessageError{message: "Sub2API 用户信息无效"}
+	}
+
+	username := sub2APIUsername(input.SourceOrigin, input.UserID)
+	user, ok, err := repository.GetUserByUsername(username)
+	if err != nil {
+		return model.AuthSession{}, err
+	}
+	if !ok {
+		user = model.User{
+			ID:          newID("user"),
+			Username:    username,
+			Role:        model.UserRoleUser,
+			AffCode:     newAffCode(),
+			Status:      model.UserStatusActive,
+			CreatedAt:   now(),
+			DisplayName: sub2APIDisplayName(input),
+		}
+	} else if user.Status == model.UserStatusBan {
+		return model.AuthSession{}, safeMessageError{message: "账号已被禁用"}
+	}
+
+	user.Email = firstNonEmpty(input.Email, user.Email)
+	user.DisplayName = firstNonEmpty(input.DisplayName, user.DisplayName, input.Username, input.Email, "Sub2API 用户 "+input.UserID)
+	user.AvatarURL = firstNonEmpty(input.AvatarURL, user.AvatarURL)
+	user.Role = model.UserRoleUser
+	user.Status = model.UserStatusActive
+	user.LastLoginAt = now()
+	user.UpdatedAt = now()
+	user.Extra = mergeSub2APIUserExtra(user.Extra, input)
 	user, err = repository.SaveUser(user)
 	if err != nil {
 		return model.AuthSession{}, err
@@ -448,6 +520,39 @@ func newID(prefix string) string {
 
 func newAffCode() string {
 	return strings.ToUpper(strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
+}
+
+func sub2APIUsername(sourceOrigin string, userID string) string {
+	sum := sha256.Sum256([]byte(sourceOrigin + "|" + userID))
+	return "sub2api-" + hex.EncodeToString(sum[:])[:20]
+}
+
+func sub2APIDisplayName(input Sub2APIEmbedLoginInput) string {
+	return firstNonEmpty(input.DisplayName, input.Username, input.Email, "Sub2API 用户 "+input.UserID)
+}
+
+func mergeSub2APIUserExtra(raw string, input Sub2APIEmbedLoginInput) string {
+	extra := userExtra{}
+	_ = json.Unmarshal([]byte(raw), &extra)
+	extra.Sub2API = &sub2APIUserInfo{
+		SourceOrigin: input.SourceOrigin,
+		UserID:       input.UserID,
+		Email:        strings.TrimSpace(input.Email),
+		Username:     strings.TrimSpace(input.Username),
+		UpdatedAt:    now(),
+	}
+	data, _ := json.Marshal(extra)
+	return string(data)
+}
+
+func sub2APIEmbedSecret() string {
+	if secret := strings.TrimSpace(config.Cfg.Sub2APIEmbedSecret); secret != "" {
+		return secret
+	}
+	if secret := strings.TrimSpace(os.Getenv("JWT_SECRET")); secret != "" && secret != "infinite-canvas" {
+		return config.Cfg.JWTSecret
+	}
+	return ""
 }
 
 func normalizeUserDefaults(user *model.User) {

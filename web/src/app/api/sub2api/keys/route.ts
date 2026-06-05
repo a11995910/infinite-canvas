@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 
-import { assertAllowedSub2APIOrigin, buildSub2APIProxyBaseUrl, normalizeSub2APIOrigin, signSub2APIOrigin } from "@/lib/sub2api-server";
+import { assertAllowedSub2APIOrigin, buildSub2APIProxyBaseUrl, normalizeSub2APIOrigin, readBearerToken, signSub2APIOrigin } from "@/lib/sub2api-server";
 
 export const runtime = "nodejs";
 
@@ -66,9 +66,4 @@ export async function GET(request: NextRequest) {
     } catch (error) {
         return Response.json({ message: error instanceof Error ? error.message : "读取 Sub2API Key 失败" }, { status: 400 });
     }
-}
-
-function readBearerToken(request: NextRequest) {
-    const header = request.headers.get("authorization") || "";
-    return header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
 }

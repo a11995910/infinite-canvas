@@ -1,6 +1,6 @@
 # 待测试
 
-- Sub2API 自定义菜单 iframe 嵌入模式下，页面会读取 `ui_mode=embedded`、`token` 和 `src_host`，通过服务端代理获取当前用户 API Key，并自动写入本地直连渠道；AI 请求会经 `/api/sub2api/proxy/*` 由画布服务端转发到 Sub2API，避免浏览器跨域直连。画布服务端生成代理地址时会优先使用反向代理传入的公开协议和域名，适配 HTTPS iframe 场景。
+- Sub2API 自定义菜单 iframe 嵌入模式下，页面会读取 `ui_mode=embedded`、`token` 和 `src_host`，通过 Sub2API `/api/v1/auth/me` 校验当前用户并创建或复用画布本地会话，避免 iframe 内二次登录；登录成功后再通过服务端代理获取当前用户 API Key，并自动写入本地直连渠道。AI 请求会经 `/api/sub2api/proxy/*` 由画布服务端转发到 Sub2API，避免浏览器跨域直连。画布服务端生成代理地址时会优先使用反向代理传入的公开协议和域名，适配 HTTPS iframe 场景。
 - 模型配置弹窗新增生图 API 接口选择，支持 Image API 与 Responses API，并可配置流式传输、中间步骤图像数、返回 Base64、Codex CLI 兼容模式和请求超时。
 - 生图参数新增输出格式、压缩比例和审核级别；画布节点、配置节点和助手生图会随请求传递 `output_format` 等参数。
 - 后端模型代理新增 `/api/v1/responses` 转发，渠道配置新增请求超时，流式响应会边读边刷新给前端。

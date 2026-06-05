@@ -225,7 +225,9 @@ services:
 https://canvas.example.com
 ```
 
-Sub2API 自定义菜单的 URL 填写画布站点地址即可。Sub2API 会在 iframe URL 中追加 `ui_mode=embedded`、`token` 和 `src_host`，画布会使用这些参数读取当前用户的 Sub2API Key，并把本地直连渠道自动配置为当前账号的 Sub2API 代理。
+Sub2API 自定义菜单的 URL 填写画布站点地址即可。Sub2API 会在 iframe URL 中追加 `ui_mode=embedded`、`token` 和 `src_host`，画布服务端会使用 `token` 调用 Sub2API 的 `/api/v1/auth/me` 校验当前用户，校验通过后创建或复用对应的画布本地账号并签发画布登录会话。iframe 内不会要求用户再次登录画布。
+
+完成登录会话后，画布会继续读取当前用户的 Sub2API Key，并把本地直连渠道自动配置为当前账号的 Sub2API 代理。登录换票和 Key 自动配置是两条独立流程：如果当前 Sub2API 用户没有可用 Key，画布仍可登录打开，只是 AI 调用渠道需要用户后续补充。
 
 生产环境建议在 `.env` 中限制允许接入的 Sub2API 来源：
 
@@ -238,7 +240,7 @@ SUB2API_EMBED_PROXY_TTL_SECONDS=86400
 说明：
 
 - `SUB2API_EMBED_ALLOWED_ORIGINS` 为空时不限制来源，适合临时测试；生产环境建议填写明确域名。
-- `SUB2API_EMBED_PROXY_SECRET` 用于签名画布服务端代理地址，避免代理接口被随意改成其他来源。
+- `SUB2API_EMBED_PROXY_SECRET` 用于 Sub2API 嵌入免登录换票和画布服务端代理地址签名，生产环境必须使用随机长字符串，避免内部登录接口和代理接口被伪造调用。
 - `SUB2API_EMBED_PROXY_TTL_SECONDS` 控制代理签名有效期，默认 24 小时。
 - 本地开发需要接入 `localhost` 或内网 Sub2API 时，可临时设置 `SUB2API_EMBED_ALLOW_PRIVATE_HOSTS=true`，生产环境不要打开。
 

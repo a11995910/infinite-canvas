@@ -78,6 +78,30 @@ export function buildSub2APIEmbedConfig(config: AiConfig, payload: Sub2APIEmbedC
     };
 }
 
+export function clearSub2APIEmbedConfig(config: AiConfig): AiConfig {
+    const localChannels = config.localChannels.filter((item) => item.id !== SUB2API_EMBED_CHANNEL_ID);
+    const hasEmbedChannel = localChannels.length !== config.localChannels.length;
+    const usesEmbedChannel = [config.activeChannelId, config.imageChannelId, config.textChannelId, config.videoChannelId].includes(SUB2API_EMBED_CHANNEL_ID);
+    if (!hasEmbedChannel && !usesEmbedChannel) return config;
+
+    const fallbackChannel = localChannels[0];
+    const fallbackId = fallbackChannel?.id || "";
+    const replaceEmbedId = (id: string) => (id === SUB2API_EMBED_CHANNEL_ID ? fallbackId : id);
+    const models = Array.from(new Set(localChannels.flatMap((item) => item.models)));
+    return {
+        ...config,
+        channelMode: config.channelMode === "local" && !localChannels.length ? "remote" : config.channelMode,
+        baseUrl: fallbackChannel?.baseUrl || "",
+        apiKey: fallbackChannel?.apiKey || "",
+        localChannels,
+        models,
+        activeChannelId: replaceEmbedId(config.activeChannelId),
+        imageChannelId: replaceEmbedId(config.imageChannelId),
+        textChannelId: replaceEmbedId(config.textChannelId),
+        videoChannelId: replaceEmbedId(config.videoChannelId),
+    };
+}
+
 export function hasSub2APIEmbedChannel(config: AiConfig, payload: Sub2APIEmbedConfig) {
     const channel = config.localChannels.find((item) => item.id === SUB2API_EMBED_CHANNEL_ID);
     return channel?.apiKey === payload.selectedKey.key && channel.baseUrl === payload.proxyBaseUrl;

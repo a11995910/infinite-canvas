@@ -20,6 +20,15 @@ type registerRequest struct {
 	Password string `json:"password"`
 }
 
+type sub2APIEmbedLoginRequest struct {
+	SourceOrigin string `json:"sourceOrigin"`
+	UserID       string `json:"userId"`
+	Email        string `json:"email"`
+	Username     string `json:"username"`
+	DisplayName  string `json:"displayName"`
+	AvatarURL    string `json:"avatarUrl"`
+}
+
 type saveUserRequest struct {
 	ID          string           `json:"id"`
 	Username    string           `json:"username"`
@@ -49,6 +58,28 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	var request loginRequest
 	_ = json.NewDecoder(r.Body).Decode(&request)
 	session, err := service.Login(request.Username, request.Password)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, session)
+}
+
+func Sub2APIEmbedLogin(w http.ResponseWriter, r *http.Request) {
+	if !service.ValidateSub2APIEmbedSecret(r.Header.Get("X-Sub2API-Embed-Secret")) {
+		FailWithStatus(w, http.StatusUnauthorized, "Sub2API 嵌入登录凭据无效")
+		return
+	}
+	var request sub2APIEmbedLoginRequest
+	_ = json.NewDecoder(r.Body).Decode(&request)
+	session, err := service.LoginWithSub2APIEmbed(service.Sub2APIEmbedLoginInput{
+		SourceOrigin: request.SourceOrigin,
+		UserID:       request.UserID,
+		Email:        request.Email,
+		Username:     request.Username,
+		DisplayName:  request.DisplayName,
+		AvatarURL:    request.AvatarURL,
+	})
 	if err != nil {
 		FailError(w, err)
 		return

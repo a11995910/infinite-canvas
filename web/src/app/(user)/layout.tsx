@@ -1,12 +1,11 @@
 "use client";
 
-"use client";
-
 import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { AppTopNav } from "@/components/layout/app-top-nav";
+import { isSub2APIEmbedded } from "@/lib/sub2api-embed";
 import { useUserStore } from "@/stores/use-user-store";
 
 const protectedPrefixes = ["/image", "/workflows", "/video", "/canvas", "/assets", "/asset-library"];
@@ -16,17 +15,19 @@ export default function UserLayout({ children }: { children: ReactNode }) {
     const router = useRouter();
     const user = useUserStore((state) => state.user);
     const isReady = useUserStore((state) => state.isReady);
+    const isEmbedLoginFailed = useUserStore((state) => state.isEmbedLoginFailed);
     const isProtectedPage = protectedPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+    const waitingForEmbedSession = isProtectedPage && isSub2APIEmbedded() && !user && !isEmbedLoginFailed;
 
     useEffect(() => {
-        if (!isReady || !isProtectedPage || user) return;
+        if (!isReady || !isProtectedPage || user || waitingForEmbedSession) return;
         router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
-    }, [isProtectedPage, isReady, pathname, router, user]);
+    }, [isProtectedPage, isReady, pathname, router, user, waitingForEmbedSession]);
 
     return (
         <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
             <AppTopNav />
-            <div className="min-h-0 flex-1 overflow-hidden">{isProtectedPage && (!isReady || !user) ? null : children}</div>
+            <div className="min-h-0 flex-1 overflow-hidden">{isProtectedPage && (!isReady || !user || waitingForEmbedSession) ? null : children}</div>
         </div>
     );
 }
