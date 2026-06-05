@@ -8,7 +8,9 @@ import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { fetchUserConfig } from "@/services/api/user-config";
+import { fetchSub2APIEmbedConfig } from "@/services/api/sub2api-embed";
 import { defaultUserStorageProvider, saveUserStorageProvider } from "@/services/image-storage";
+import { buildSub2APIEmbedConfig, hasSub2APIEmbedChannel, readSub2APIEmbedParams } from "@/lib/sub2api-embed";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const pathname = usePathname();
@@ -28,6 +30,18 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     useEffect(() => {
         if (!isLoginPage) void hydrateUser();
     }, [hydrateUser, isLoginPage]);
+
+    useEffect(() => {
+        const embed = readSub2APIEmbedParams();
+        if (!embed.embedded || !embed.token || !embed.srcHost) return;
+        void fetchSub2APIEmbedConfig({ token: embed.token, srcHost: embed.srcHost })
+            .then((payload) => {
+                if (hasSub2APIEmbedChannel(useConfigStore.getState().config, payload)) return;
+                const nextConfig = buildSub2APIEmbedConfig(useConfigStore.getState().config, payload);
+                Object.entries(nextConfig).forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
+            })
+            .catch((error) => console.warn("Sub2API 嵌入配置失败", error));
+    }, [updateConfig]);
 
     useEffect(() => {
         if (token && user?.id) {

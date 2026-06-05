@@ -1,0 +1,20 @@
+import { chooseSub2APIKey, type Sub2APIEmbedConfig, type Sub2APIEmbedKey } from "@/lib/sub2api-embed";
+
+type Sub2APIEmbedKeysResponse = {
+    sourceOrigin: string;
+    proxyBaseUrl: string;
+    keys: Sub2APIEmbedKey[];
+};
+
+export async function fetchSub2APIEmbedConfig(params: { token: string; srcHost: string }): Promise<Sub2APIEmbedConfig> {
+    const query = new URLSearchParams({ src_host: params.srcHost });
+    const response = await fetch(`/api/sub2api/keys?${query.toString()}`, {
+        headers: { Authorization: `Bearer ${params.token}` },
+    });
+    const payload = (await response.json().catch(() => null)) as Sub2APIEmbedKeysResponse | { message?: string } | null;
+    if (!response.ok) throw new Error((payload && "message" in payload && payload.message) || "读取 Sub2API Key 失败");
+    const data = payload as Sub2APIEmbedKeysResponse;
+    const selectedKey = chooseSub2APIKey(data.keys || []);
+    if (!selectedKey) throw new Error("当前账号没有可用的 Sub2API Key");
+    return { sourceOrigin: data.sourceOrigin, proxyBaseUrl: data.proxyBaseUrl, selectedKey, keys: data.keys || [] };
+}

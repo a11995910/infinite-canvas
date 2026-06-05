@@ -216,6 +216,31 @@ services:
 - 开启 HTTPS。
 - 定期备份 `.env` 和 `data`。
 
+## Sub2API 自定义菜单嵌入
+
+如果把无限画布作为 Sub2API 的自定义菜单 iframe 页面使用，推荐部署成独立站点，例如：
+
+```text
+https://canvas.example.com
+```
+
+Sub2API 自定义菜单的 URL 填写画布站点地址即可。Sub2API 会在 iframe URL 中追加 `ui_mode=embedded`、`token` 和 `src_host`，画布会使用这些参数读取当前用户的 Sub2API Key，并把本地直连渠道自动配置为当前账号的 Sub2API 代理。
+
+生产环境建议在 `.env` 中限制允许接入的 Sub2API 来源：
+
+```bash
+SUB2API_EMBED_ALLOWED_ORIGINS=https://fast.youkeduo.site
+SUB2API_EMBED_PROXY_SECRET=请替换为随机长字符串
+SUB2API_EMBED_PROXY_TTL_SECONDS=86400
+```
+
+说明：
+
+- `SUB2API_EMBED_ALLOWED_ORIGINS` 为空时不限制来源，适合临时测试；生产环境建议填写明确域名。
+- `SUB2API_EMBED_PROXY_SECRET` 用于签名画布服务端代理地址，避免代理接口被随意改成其他来源。
+- `SUB2API_EMBED_PROXY_TTL_SECONDS` 控制代理签名有效期，默认 24 小时。
+- 本地开发需要接入 `localhost` 或内网 Sub2API 时，可临时设置 `SUB2API_EMBED_ALLOW_PRIVATE_HOSTS=true`，生产环境不要打开。
+
 ### 1Panel 反向代理配置
 
 如果应用和 OpenResty/1Panel 在同一台服务器，代理地址不要填写公网 IP，直接走本机回环地址：

@@ -11,6 +11,7 @@ import { defaultUserStorageProvider, saveUserStorageProvider, USER_STORAGE_PROVI
 import { clearStorageConfigCache as clearFileStorageCache } from "@/services/file-storage";
 import { normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { isSub2APIEmbedded } from "@/lib/sub2api-embed";
 
 export function AppConfigModal() {
     const { message, modal } = App.useApp();
@@ -27,7 +28,8 @@ export function AppConfigModal() {
     const modelChannel = publicSettings?.modelChannel;
     const storageSettings = publicSettings?.storage;
     const allowUserStorageProvider = storageSettings?.allowUserProvider === true;
-    const allowCustomChannel = modelChannel?.allowCustomChannel === true;
+    const sub2apiEmbedded = isSub2APIEmbedded();
+    const allowCustomChannel = modelChannel?.allowCustomChannel === true || sub2apiEmbedded;
     const effectiveMode = allowCustomChannel ? config.channelMode : "remote";
     const modelConfig = effectiveMode === "remote" ? effectiveConfig : config;
     const [userStorage, setUserStorage] = useState<UserStorageProvider>(() => defaultUserStorageProvider());
@@ -458,6 +460,11 @@ export function AppConfigModal() {
         >
             <div className="pt-1">
                 <Form layout="vertical" requiredMark={false}>
+                    {sub2apiEmbedded ? (
+                        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+                            已连接 Sub2API，当前画布会优先使用 Sub2API 账号中的可用 API Key。
+                        </div>
+                    ) : null}
                     {allowCustomChannel ? (
                         <Form.Item label="渠道模式" className="mb-4">
                             <Segmented

@@ -59,6 +59,7 @@ export type AiConfig = {
 };
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
+const SUB2API_EMBED_CHANNEL_ID = "sub2api-embedded";
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -112,7 +113,7 @@ type ConfigStore = {
 };
 
 function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null) {
-    const channelMode = modelChannel?.allowCustomChannel ? config.channelMode : "remote";
+    const channelMode = modelChannel?.allowCustomChannel || hasSub2APIEmbedChannel(config) ? config.channelMode : "remote";
     if (channelMode === "local" || !modelChannel) return { ...normalizeLocalConfig(config), channelMode };
     const models = modelChannel.availableModels;
     const fallbackModel = modelChannel.defaultModel || models[0] || "";
@@ -140,6 +141,10 @@ function normalizeLocalConfig(config: AiConfig) {
     const localChannels = normalizeLocalChannels(config);
     const models = Array.from(new Set(localChannels.flatMap((channel) => channel.models)));
     return { ...config, localChannels, models };
+}
+
+function hasSub2APIEmbedChannel(config: AiConfig) {
+    return config.channelMode === "local" && Array.isArray(config.localChannels) && config.localChannels.some((channel) => channel.id === SUB2API_EMBED_CHANNEL_ID);
 }
 
 export function normalizeLocalChannels(config: Partial<AiConfig>) {

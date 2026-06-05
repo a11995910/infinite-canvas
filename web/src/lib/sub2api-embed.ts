@@ -1,0 +1,94 @@
+import type { AiConfig, LocalModelChannel } from "@/stores/use-config-store";
+
+export type Sub2APIEmbedParams = {
+    embedded: boolean;
+    token: string;
+    srcHost: string;
+};
+
+export type Sub2APIEmbedKey = {
+    id: number;
+    key: string;
+    name: string;
+    status: string;
+    group?: {
+        name?: string;
+        platform?: string;
+        allow_image_generation?: boolean;
+    };
+};
+
+export type Sub2APIEmbedConfig = {
+    sourceOrigin: string;
+    proxyBaseUrl: string;
+    selectedKey: Sub2APIEmbedKey;
+    keys: Sub2APIEmbedKey[];
+};
+
+export const SUB2API_EMBED_CHANNEL_ID = "sub2api-embedded";
+export const SUB2API_EMBED_MODEL_FALLBACKS = ["gpt-image-2", "gpt-5.5", "Agnes-Video-V2.0"];
+
+export function readSub2APIEmbedParams(): Sub2APIEmbedParams {
+    if (typeof window === "undefined") return { embedded: false, token: "", srcHost: "" };
+    const params = new URLSearchParams(window.location.search);
+    return {
+        embedded: params.get("ui_mode") === "embedded",
+        token: (params.get("token") || "").trim(),
+        srcHost: (params.get("src_host") || "").trim(),
+    };
+}
+
+export function isSub2APIEmbedded() {
+    const params = readSub2APIEmbedParams();
+    return params.embedded && !!params.token && !!params.srcHost;
+}
+
+export function chooseSub2APIKey(keys: Sub2APIEmbedKey[]) {
+    const active = keys.filter((key) => key.status === "active" && key.key);
+    return (
+        active.find((key) => key.group?.platform === "openai" && key.group.allow_image_generation === true) ||
+        active.find((key) => key.group?.platform === "openai") ||
+        active.find((key) => key.group?.allow_image_generation === true) ||
+        active[0] ||
+        null
+    );
+}
+
+export function buildSub2APIEmbedConfig(config: AiConfig, payload: Sub2APIEmbedConfig): AiConfig {
+    const channel = buildSub2APIEmbedChannel(payload);
+    const currentChannels = config.localChannels.filter((item) => item.id !== SUB2API_EMBED_CHANNEL_ID);
+    const channels = [channel, ...currentChannels];
+    const models = Array.from(new Set(channels.flatMap((item) => item.models)));
+    return {
+        ...config,
+        channelMode: "local",
+        baseUrl: channel.baseUrl,
+        apiKey: channel.apiKey,
+        localChannels: channels,
+        models,
+        activeChannelId: SUB2API_EMBED_CHANNEL_ID,
+        imageChannelId: SUB2API_EMBED_CHANNEL_ID,
+        textChannelId: SUB2API_EMBED_CHANNEL_ID,
+        videoChannelId: SUB2API_EMBED_CHANNEL_ID,
+        apiMode: "images",
+        imageModel: config.imageModel || "gpt-image-2",
+        textModel: config.textModel || "gpt-5.5",
+        videoModel: config.videoModel || "Agnes-Video-V2.0",
+        responseFormatB64Json: true,
+    };
+}
+
+export function hasSub2APIEmbedChannel(config: AiConfig, payload: Sub2APIEmbedConfig) {
+    const channel = config.localChannels.find((item) => item.id === SUB2API_EMBED_CHANNEL_ID);
+    return channel?.apiKey === payload.selectedKey.key && channel.baseUrl === payload.proxyBaseUrl;
+}
+
+function buildSub2APIEmbedChannel(payload: Sub2APIEmbedConfig): LocalModelChannel {
+    return {
+        id: SUB2API_EMBED_CHANNEL_ID,
+        name: `Sub2API：${payload.selectedKey.group?.name || payload.selectedKey.name || "当前账号"}`,
+        baseUrl: payload.proxyBaseUrl,
+        apiKey: payload.selectedKey.key,
+        models: SUB2API_EMBED_MODEL_FALLBACKS,
+    };
+}
