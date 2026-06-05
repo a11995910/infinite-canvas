@@ -102,6 +102,29 @@ npm run build
 
 这里有两种方案，你可以按服务器条件选择。
 
+### 服务器 SSH Key 简化配置
+
+如果本机已经有 `~/.ssh/id_ed25519`，可以直接复用同一把 key 连接 GitHub 和 VPS。先在本机的 `~/.ssh/config` 中加入 VPS 别名：
+
+```sshconfig
+Host canvas-vps
+  HostName 192.220.24.46
+  User root
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+第一次把公钥写入 VPS 时执行：
+
+```bash
+cat ~/.ssh/id_ed25519.pub | ssh root@192.220.24.46 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+```
+
+之后用下面命令确认免密登录是否可用：
+
+```bash
+ssh canvas-vps 'echo ok'
+```
+
 ### 方案 A：把代码上传到服务器，在服务器构建镜像
 
 这是最直观的方案。流程是：
