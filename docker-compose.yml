@@ -10,5 +10,5 @@ services:
     volumes:
       - ./data:/app/data
     ports:
-      - "13000:13000"
+      - "127.0.0.1:13000:13000"
     restart: unless-stopped

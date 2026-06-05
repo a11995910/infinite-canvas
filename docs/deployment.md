@@ -137,14 +137,14 @@ services:
     volumes:
       - ./data:/app/data
     ports:
-      - "13000:13000"
+      - "127.0.0.1:13000:13000"
     restart: unless-stopped
 ```
 
 启动后访问：
 
 ```text
-http://服务器IP:13000
+http://127.0.0.1:13000
 ```
 
 在 1Panel 中使用时，把这个仓库目录作为 Compose 项目导入即可。后续更新：
@@ -194,7 +194,7 @@ services:
     volumes:
       - ./data:/app/data
     ports:
-      - "13000:13000"
+      - "127.0.0.1:13000:13000"
     restart: unless-stopped
 ```
 
@@ -212,6 +212,7 @@ services:
 
 - 不要使用默认 `ADMIN_PASSWORD`。
 - 不要使用默认 `JWT_SECRET`。
+- 设置 `GIN_MODE=release`，避免后端输出调试日志。
 - 用 1Panel 站点代理到 `127.0.0.1:13000`。
 - 开启 HTTPS。
 - 定期备份 `.env` 和 `data`。
@@ -268,7 +269,7 @@ curl http://127.0.0.1:13000/api/health
 ss -lntp | grep -E '13000|18080'
 ```
 
-如果 `127.0.0.1:13000` 能访问，但公网 `服务器IP:13000` 不能访问，优先检查云厂商安全组、1Panel 防火墙和系统防火墙。生产环境更推荐只开放 `80/443`，由域名反向代理访问，不必长期开放 `13000`。
+生产环境默认只把 `13000` 绑定到 `127.0.0.1`，由 Nginx、OpenResty 或 1Panel 反向代理访问。不要长期把 `13000` 直接暴露到公网。
 
 ## 自定义前后端接口
 
