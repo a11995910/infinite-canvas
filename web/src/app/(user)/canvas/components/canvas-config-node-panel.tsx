@@ -159,22 +159,6 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, inputs, o
                 ) : null}
             </div>
 
-            {mode === "image" && (
-                <div className="mb-2 flex items-center justify-between gap-3" onMouseDown={(event) => event.stopPropagation()}>
-                    <div className="text-xs opacity-75">接口模式</div>
-                    <Segmented
-                        size="small"
-                        className="canvas-config-mode !rounded-md !p-0.5"
-                        value={config.apiMode}
-                        onChange={(value) => onConfigChange(node.id, { apiMode: value as "images" | "responses" })}
-                        options={[
-                            { value: "images", label: "标准 (Images)" },
-                            { value: "responses", label: "对话 (Responses)" },
-                        ]}
-                    />
-                </div>
-            )}
-
             <Button
                 type="primary"
                 className="mt-auto !h-9 !w-full !cursor-pointer !rounded-lg"
@@ -368,7 +352,7 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
     return {
         ...globalConfig,
         model: node.metadata?.model || defaultModel || globalConfig.model || defaultConfig.model,
-        apiMode: node.metadata?.apiMode || globalConfig.apiMode || defaultConfig.apiMode, // 👈 新增：读取节点自身保存或全局降级的 apiMode 模式
+        apiMode: "images",
         quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
         size: node.metadata?.size || globalConfig.size || defaultConfig.size,
         outputFormat: node.metadata?.outputFormat || globalConfig.outputFormat || defaultConfig.outputFormat,

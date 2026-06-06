@@ -3181,7 +3181,7 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
     return {
         ...config,
         model: node?.metadata?.model || defaultModel || config.model || defaultConfig.model,
-        apiMode: node?.metadata?.apiMode || config.apiMode || defaultConfig.apiMode, // 👈 新增：画布节点生图时应用特定的 apiMode 配置
+        apiMode: "images",
         activeChannelId,
         imageChannelId: node?.metadata?.imageChannelId || config.imageChannelId,
         videoChannelId: node?.metadata?.videoChannelId || config.videoChannelId,

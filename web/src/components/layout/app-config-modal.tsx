@@ -637,16 +637,6 @@ export function AppConfigModal() {
                         </Form.Item>
                     </div>
                     <div className="grid gap-4 md:grid-cols-3">
-                        <Form.Item label="生图 API 接口" className="mb-4">
-                            <Select
-                                value={config.apiMode}
-                                onChange={(value) => updateConfig("apiMode", value)}
-                                options={[
-                                    { label: "Image API (/v1/images)", value: "images" },
-                                    { label: "Responses API (/v1/responses)", value: "responses" },
-                                ]}
-                            />
-                        </Form.Item>
                         <Form.Item label="请求超时（秒）" className="mb-4">
                             <Input value={config.timeout} inputMode="numeric" onChange={(event) => updateConfig("timeout", event.target.value)} />
                         </Form.Item>

@@ -125,7 +125,7 @@
 | `enabled` | boolean | 是否启用 |
 | `remark` | string | 备注 |
 
-后端调用模型时，会从已启用、已配置 `baseUrl` 和 `apiKey`、且 `models` 包含目标模型的渠道中选择一个。后端代理支持 OpenAI 兼容的 `/v1/images/*`、`/v1/responses`、`/v1/chat/completions` 和视频相关路径。
+后端调用模型时，会从已启用、已配置 `baseUrl` 和 `apiKey`、且 `models` 包含目标模型的渠道中选择一个。后端代理支持 OpenAI 兼容的 `/v1/images/*`、`/v1/responses`、`/v1/chat/completions` 和视频相关路径；当前前端生图统一走 `/v1/images/*`，不再暴露 Responses 图像模式。
 
 `storage` 字段：
 

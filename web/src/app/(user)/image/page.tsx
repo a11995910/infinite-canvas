@@ -25,7 +25,7 @@ import {
     WandSparkles,
 } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Segmented, Tag, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 
@@ -714,7 +714,6 @@ export default function ImagePage() {
         if (log.config.quality) updateConfig("quality", log.config.quality);
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.count) updateConfig("count", log.config.count);
-        if (log.config.apiMode) updateConfig("apiMode", log.config.apiMode);
         if (log.config.outputFormat) updateConfig("outputFormat", log.config.outputFormat);
         if (log.config.outputCompression) updateConfig("outputCompression", log.config.outputCompression);
         if (log.config.moderation) updateConfig("moderation", log.config.moderation);
@@ -1170,21 +1169,6 @@ function WorkbenchPanel({
                                     onMissingConfig={() => openConfigDialog(false)}
                                     fullWidth
                                 />
-                            </label>
-                            <label className="grid gap-1 text-xs text-stone-500 dark:text-stone-400">
-                                接口模式
-                                <div className="flex h-11 items-center rounded-xl border border-stone-200 bg-background px-2.5 dark:border-stone-800">
-                                    <Segmented
-                                        size="small"
-                                        className="canvas-config-mode !rounded-md !p-0.5 w-full"
-                                        value={config.apiMode}
-                                        onChange={(value) => updateConfig("apiMode", value as "images" | "responses")}
-                                        options={[
-                                            { value: "images", label: "images" },
-                                            { value: "responses", label: "responses" },
-                                        ]}
-                                    />
-                                </div>
                             </label>
                             <QuickSelect label="尺寸" value={config.size || "auto"} options={quickSizeOptions} onChange={(value) => updateConfig("size", value)} />
                             <QuickSelect label="质量" value={config.quality || "auto"} options={quickQualityOptions} onChange={(value) => updateConfig("quality", value)} />
@@ -1651,19 +1635,6 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
             <SettingSubsection title="模型" summary={model || "未选择模型"} collapsed={modelCollapsed} onToggle={() => setModelCollapsed((value) => !value)}>
                 <div className="space-y-2">
                     <ModelPicker config={config} value={model} channelId={config.imageChannelId} onChange={(value, channelId) => { updateConfig("imageModel", value); if (channelId) updateConfig("imageChannelId", channelId); }} fullWidth onMissingConfig={() => openConfigDialog(false)} />
-                    <div className="flex items-center justify-between gap-3 pt-1">
-                        <div className="text-xs opacity-75">接口模式</div>
-                        <Segmented
-                            size="small"
-                            className="canvas-config-mode !rounded-md !p-0.5"
-                            value={config.apiMode}
-                            onChange={(value) => updateConfig("apiMode", value as "images" | "responses")}
-                            options={[
-                                { value: "images", label: "images" },
-                                { value: "responses", label: "responses" },
-                            ]}
-                        />
-                    </div>
                 </div>
             </SettingSubsection>
             <ImageSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-3" maxCount={10} collapsible />
@@ -1806,7 +1777,7 @@ function TaskInfo({ result, error, onCopyPrompt }: { result: GenerationResult; e
                 ) : null}
                 <Tag className="m-0">{formatLogTime(result.createdAt)}</Tag>
                 <Tag className="m-0">{result.model}</Tag>
-                <Tag className="m-0">{result.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
+                <Tag className="m-0">Images</Tag>
                 <Tag className="m-0">{result.config.size || "auto"}</Tag>
                 <Tag className="m-0">{result.config.quality || "auto"}</Tag>
                 <Tag className="m-0">{result.config.outputFormat || "png"}</Tag>
@@ -1942,7 +1913,7 @@ function HistoryLogCard({
                     ) : null}
                     <Tag className="m-0 text-[10px]">{formatLogTime(log.createdAt)}</Tag>
                     <Tag className="m-0 text-[10px]">{log.model}</Tag>
-                    <Tag className="m-0 text-[10px]">{log.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
+                    <Tag className="m-0 text-[10px]">Images</Tag>
                     <Tag className="m-0 text-[10px]">{log.config.size || "auto"}</Tag>
                     <Tag className="m-0 text-[10px]">{log.config.quality || "auto"}</Tag>
                     <Tag className="m-0 text-[10px]">{log.config.outputFormat || "png"}</Tag>
@@ -2206,7 +2177,7 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
         quality: log.config?.quality || log.quality || "",
         size: log.config?.size || log.size || "",
         count: log.config?.count || String(log.imageCount || log.successCount || 1),
-        apiMode: log.config?.apiMode || "images",
+        apiMode: "images",
         outputFormat: log.config?.outputFormat || "png",
         outputCompression: log.config?.outputCompression || "100",
         moderation: log.config?.moderation || "auto",
@@ -2225,7 +2196,7 @@ function buildGenerationLogConfig(config: AiConfig): GenerationLogConfig {
         quality: config.quality,
         size: config.size,
         count: config.count,
-        apiMode: config.apiMode,
+        apiMode: "images",
         outputFormat: config.outputFormat,
         outputCompression: config.outputCompression,
         moderation: config.moderation,

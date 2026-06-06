@@ -101,7 +101,7 @@ type WorkflowGenerationConfig = {
   promptTemplate: string;
   negativePrompt?: string;
   model: string;
-  apiMode: "images" | "responses";
+  apiMode: "images";
   size: string;
   quality: string;
   outputFormat: "png" | "jpeg" | "webp";
@@ -136,7 +136,7 @@ DELETE /api/workflows/:id
 POST   /api/workflows/:id/run
 ```
 
-`run` 接口也可以先不单独做，前端先把变量渲染成最终 prompt，再复用现有 `/api/v1/images` 或 `/api/v1/responses`。长期建议保留 `run` 接口，方便做审计、扣费、批量任务和权限控制。
+`run` 接口也可以先不单独做，前端先把变量渲染成最终 prompt，再复用现有 `/api/v1/images`。长期建议保留 `run` 接口，方便做审计、扣费、批量任务和权限控制。
 
 ## 分阶段实现
 

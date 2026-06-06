@@ -36,7 +36,7 @@ Agent 输出必须是结构化 JSON，前端不直接采纳自由文本：
     "systemPrompt": "...",
     "promptTemplate": "... {{photo_style}} ...",
     "negativePrompt": "...",
-    "apiMode": "responses",
+    "apiMode": "images",
     "size": "3:4",
     "quality": "high",
     "count": "1"

@@ -87,7 +87,6 @@
 
 - `/v1/images/generations`：文生图。
 - `/v1/images/edits`：图生图/参考图编辑。
-- `/v1/responses`：Responses API 生图，支持读取最终图和必要的中间图回退。
 - `/v1/chat/completions`：文本问答和带图问答。
 - `/v1/videos`：视频任务创建。
 - `/v1/videos/{id}`：视频任务轮询和结果读取。
@@ -100,7 +99,7 @@
 - 本地多个渠道，每个渠道可配置独立模型列表。
 - 云端多个后台渠道，前端可按图片、视频、文本分别选择渠道和模型。
 - 默认图片模型、视频模型、文本模型。
-- Images API / Responses API。
+- 前端生图统一使用 Images API。
 - 流式传输、中间步骤图数量、返回 Base64、Codex CLI 兼容模式和请求超时。
 - 图片质量。
 - 图片比例。

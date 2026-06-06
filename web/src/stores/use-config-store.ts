@@ -222,7 +222,7 @@ export const useConfigStore = create<ConfigStore>()(
                         textChannelId: config.textChannelId || localChannels[0]?.id || "",
                         activeChannelId: config.activeChannelId || "",
                         channelMode: config.channelMode || "remote",
-                        apiMode: config.apiMode === "responses" ? "responses" : "images",
+                        apiMode: "images",
                         imageModel: config.imageModel || config.model,
                         videoModel: config.videoModel || "Agnes-Video-V2.0",
                         textModel: config.textModel || config.model,

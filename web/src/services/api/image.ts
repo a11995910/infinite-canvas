@@ -19,13 +19,6 @@ type ImageApiResponse = {
     msg?: string;
 };
 
-type ResponsesApiResponse = {
-    output?: Array<Record<string, unknown>>;
-    error?: { message?: string };
-    code?: number;
-    msg?: string;
-};
-
 type GeneratedImage = { id: string; dataUrl: string; seed?: number };
 
 type ParsedImageResponse = {
@@ -168,50 +161,6 @@ function parseImagePayload(payload: ImageApiResponse, mime: string): GeneratedIm
 
     if (images.length === 0) {
         throw new ImageRequestError("接口没有返回图片", payload);
-    }
-
-    return images;
-}
-
-function getStringRecordValue(record: Record<string, unknown>, key: string) {
-    const value = record[key];
-    return typeof value === "string" && value.trim() ? value.trim() : "";
-}
-
-function collectResponsesImageStrings(value: unknown, depth = 0): string[] {
-    if (depth > 5 || value == null) return [];
-    if (typeof value === "string") return value.trim() ? [value.trim()] : [];
-    if (Array.isArray(value)) return value.flatMap((item) => collectResponsesImageStrings(item, depth + 1));
-    if (typeof value !== "object") return [];
-    const record = value as Record<string, unknown>;
-    return ["result", "b64_json", "base64", "image", "image_data", "data"].flatMap((key) => collectResponsesImageStrings(record[key], depth + 1));
-}
-
-function getResponsesImageResultBase64(result: unknown) {
-    return collectResponsesImageStrings(result)[0] || "";
-}
-
-function collectResponsesImageBase64(item: Record<string, unknown>) {
-    const values: string[] = [];
-    const result = getResponsesImageResultBase64(item.result);
-    if (result) values.push(result);
-    values.push(...collectResponsesImageStrings(item));
-    return Array.from(new Set(values));
-}
-
-function parseResponsesPayload(payload: ResponsesApiResponse, mime: string): GeneratedImage[] {
-    if (typeof payload.code === "number" && payload.code !== 0) {
-        throw new ImageRequestError(payload.msg || "请求失败", payload);
-    }
-    const images =
-        payload.output
-            ?.filter((item) => item.type === "image_generation_call")
-            .flatMap((item) => collectResponsesImageBase64(item))
-            .filter(Boolean)
-            .map((b64) => ({ id: nanoid(), dataUrl: normalizeBase64Image(b64, mime) })) || [];
-
-    if (images.length === 0) {
-        throw new ImageRequestError("Responses API 没有返回图片", payload);
     }
 
     return images;
@@ -362,40 +311,6 @@ async function parseImagesStreamResponse(response: Response, mime: string): Prom
     if (resultPayload) return parseImagePayload(resultPayload, mime);
     if (completedItems.length) return parseImagePayload({ data: completedItems }, mime);
     throw new ImageRequestError("流式接口未返回最终图片数据", events);
-}
-
-async function parseResponsesStreamResponse(response: Response, mime: string): Promise<GeneratedImage[]> {
-    let completedPayload: ResponsesApiResponse | null = null;
-    const output: Record<string, unknown>[] = [];
-    const partialImages: string[] = [];
-    const events = await readJsonServerSentEvents(response, (event) => {
-        if (event.type === "response.image_generation_call.partial_image") {
-            const b64 = getStringRecordValue(event, "partial_image_b64");
-            if (b64) partialImages.push(b64);
-            return;
-        }
-        const responsePayload = event.response;
-        if (responsePayload && typeof responsePayload === "object" && !Array.isArray(responsePayload)) {
-            completedPayload = responsePayload as ResponsesApiResponse;
-        }
-        const item = event.item;
-        if (item && typeof item === "object" && !Array.isArray(item) && (item as Record<string, unknown>).type === "image_generation_call") {
-            output.push(item as Record<string, unknown>);
-        }
-    });
-    try {
-        return parseResponsesPayload(completedPayload || { output }, mime);
-    } catch (error) {
-        if (!partialImages.length) {
-            throw new ImageRequestError(error instanceof Error ? error.message : "Responses API 没有返回图片", {
-                completedPayload,
-                output,
-                events,
-            });
-        }
-        const lastPartialImage = partialImages[partialImages.length - 1];
-        return [{ id: nanoid(), dataUrl: normalizeBase64Image(lastPartialImage, mime) }];
-    }
 }
 
 function parseStreamChunk(chunk: string, onDelta: (value: string) => void) {
@@ -660,74 +575,6 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
     );
 }
 
-function createResponsesImageTool(config: AiConfig, params: ImageRequestParams, isEdit: boolean) {
-    const tool: Record<string, unknown> = {
-        type: "image_generation",
-        action: isEdit ? "edit" : "generate",
-        size: params.size || "auto",
-        output_format: params.outputFormat,
-        moderation: params.moderation,
-    };
-    if (params.quality && !config.codexCli) tool.quality = params.quality;
-    if (params.outputFormat !== "png") tool.output_compression = params.outputCompression;
-    if (config.streamImages) tool.partial_images = params.streamPartialImages;
-    return tool;
-}
-
-function createResponsesInput(config: AiConfig, prompt: string, inputImageDataUrls: string[]) {
-    const text = config.codexCli ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${prompt}` : prompt;
-    if (!inputImageDataUrls.length) return text;
-    return [
-        {
-            role: "user",
-            content: [
-                { type: "input_text", text },
-                ...inputImageDataUrls.map((dataUrl) => ({
-                    type: "input_image",
-                    image_url: dataUrl,
-                })),
-            ],
-        },
-    ];
-}
-
-async function requestResponsesSingle(config: AiConfig, prompt: string, inputImageDataUrls: string[], params: ImageRequestParams): Promise<GeneratedImage[]> {
-    const mime = MIME_MAP[params.outputFormat];
-    const body: Record<string, unknown> = {
-        model: config.model,
-        input: createResponsesInput(config, withSystemPrompt(config, prompt), inputImageDataUrls),
-        tools: [createResponsesImageTool(config, params, inputImageDataUrls.length > 0)],
-        tool_choice: "required",
-    };
-    if (config.streamImages) body.stream = true;
-
-    return requestAndParseImages(
-        config,
-        "/responses",
-        body,
-        params.timeoutSeconds,
-        () =>
-            requestWithTransientRetry(() =>
-                withTimeout(params.timeoutSeconds, (signal) =>
-                    fetch(aiApiUrl(config, "/responses"), {
-                        method: "POST",
-                        headers: aiHeaders(config, "application/json"),
-                        body: JSON.stringify(body),
-                        signal,
-                    }),
-                ),
-            ),
-        async (response) => {
-            if (config.streamImages && isEventStreamResponse(response)) {
-                const images = await parseResponsesStreamResponse(response, mime);
-                return { images, responseBody: summarizeGeneratedImages(images, "event-stream") };
-            }
-            const payload = (await response.json()) as ResponsesApiResponse;
-            return { images: parseResponsesPayload(payload, mime), responseBody: stringifyLogPayload(payload) };
-        },
-    );
-}
-
 async function requestAndParseImages(config: AiConfig, endpoint: string, requestBody: unknown, timeoutSeconds: number, fetchResponse: () => Promise<Response>, parseResponse: (response: Response) => Promise<ParsedImageResponse>) {
     const startedAt = Date.now();
     let logged = false;
@@ -752,21 +599,20 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
 }
 
 async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]): Promise<GeneratedImage[]> {
+    const imageConfig = { ...config, apiMode: "images" as const };
     const params = createImageRequestParams(config);
-    const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
-    const useConcurrentSingleRequests = config.apiMode === "responses" || config.codexCli || config.streamImages;
+    const useConcurrentSingleRequests = config.codexCli || config.streamImages;
     if (params.n > 1 && useConcurrentSingleRequests) {
-        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references)));
+        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...imageConfig, count: "1" }, prompt, references)));
         const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
         if (images.length) return images;
         const firstError = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
         throw firstError?.reason || new Error("所有并发请求均失败");
     }
-    if (references.length && isAgnesImageModel(config.model)) {
-        return requestAgnesImageEdit(config, prompt, references, params);
+    if (references.length && isAgnesImageModel(imageConfig.model)) {
+        return requestAgnesImageEdit(imageConfig, prompt, references, params);
     }
-    if (config.apiMode === "responses") return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
-    return references.length ? requestImageEditSingle(config, prompt, references, params) : requestImageGenerationSingle(config, prompt, params);
+    return references.length ? requestImageEditSingle(imageConfig, prompt, references, params) : requestImageGenerationSingle(imageConfig, prompt, params);
 }
 
 export async function requestGeneration(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string) {

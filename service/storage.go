@@ -767,7 +767,7 @@ func normalizeDraftConfig(value any) map[string]any {
 		"systemPrompt":          "",
 		"promptTemplate":        "",
 		"negativePrompt":        "",
-		"apiMode":               "responses",
+		"apiMode":               "images",
 		"size":                  "auto",
 		"quality":               "high",
 		"count":                 "1",

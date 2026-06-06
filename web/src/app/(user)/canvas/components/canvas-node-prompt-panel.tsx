@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ArrowUp, Library, LoaderCircle } from "lucide-react";
-import { Button, Segmented, Tooltip } from "antd";
+import { Button, Tooltip } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
 import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -76,22 +76,6 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 placeholder={mode === "video" ? "描述要生成的视频内容" : mode === "image" ? (hasImageContent ? "请输入你想要把这张图修改成什么" : "描述要生成的图片内容") : hasTextContent ? "请输入你想要将本段文本修改成什么" : "请输入你想要生成的文本内容"}
             />
 
-            {mode === "image" && (
-                <div className="mt-2 flex items-center justify-between gap-3 px-1" onMouseDown={(event) => event.stopPropagation()}>
-                    <div className="text-xs opacity-75">接口模式</div>
-                    <Segmented
-                        size="small"
-                        className="canvas-config-mode !rounded-md !p-0.5"
-                        value={config.apiMode}
-                        onChange={(value) => onConfigChange(node.id, { apiMode: value as "images" | "responses" })}
-                        options={[
-                            { value: "images", label: "标准 (Images)" },
-                            { value: "responses", label: "对话 (Responses)" },
-                        ]}
-                    />
-                </div>
-            )}
-
             <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                     <CanvasPromptLibrary onSelect={updatePrompt} />
@@ -155,7 +139,7 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
     return {
         ...globalConfig,
         model: node.metadata?.model || defaultModel || globalConfig.model || defaultConfig.model,
-        apiMode: node.metadata?.apiMode || globalConfig.apiMode || defaultConfig.apiMode,
+        apiMode: "images",
         imageChannelId: node.metadata?.imageChannelId || globalConfig.imageChannelId,
         videoChannelId: node.metadata?.videoChannelId || globalConfig.videoChannelId,
         textChannelId: node.metadata?.textChannelId || globalConfig.textChannelId,
