@@ -11,6 +11,7 @@ import { GitHubLink } from "@/components/layout/github-link";
 import { MobileNavDrawer } from "@/components/layout/mobile-nav-drawer";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
+import { isSub2APIEmbedded, withSub2APIEmbedParams } from "@/lib/sub2api-embed";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -28,6 +29,7 @@ export function AppTopNav() {
     const hideHeader = /^\/canvas\/[^/]+/.test(pathname);
     const slug = pathname.split("/").filter(Boolean)[0];
     const activeToolSlug = navigationTools.some((tool) => tool.slug === slug) ? (slug as NavigationToolSlug) : undefined;
+    const sub2apiEmbedded = isSub2APIEmbedded();
 
     return (
         <>
@@ -35,7 +37,7 @@ export function AppTopNav() {
                 <header className="sticky top-0 z-20 h-16 shrink-0 border-b border-stone-200 bg-background/90 backdrop-blur-xl dark:border-stone-800">
                     <div className="mx-auto flex h-full max-w-7xl items-stretch justify-between gap-5 px-6">
                         <div className="flex min-w-0 items-center">
-                            <Link href="/" className="flex h-full shrink-0 items-center gap-2 text-sm font-semibold leading-none tracking-tight text-stone-950 transition hover:text-stone-600 dark:text-stone-100 dark:hover:text-stone-300">
+                            <Link href={withSub2APIEmbedParams("/")} className="flex h-full shrink-0 items-center gap-2 text-sm font-semibold leading-none tracking-tight text-stone-950 transition hover:text-stone-600 dark:text-stone-100 dark:hover:text-stone-300">
                                 <span
                                     className="size-5 shrink-0 bg-current"
                                     style={{
@@ -63,7 +65,7 @@ export function AppTopNav() {
                                     return (
                                         <Link
                                             key={tool.slug}
-                                            href={`/${tool.slug}`}
+                                            href={withSub2APIEmbedParams(`/${tool.slug}`)}
                                             className={cn(
                                                 "relative flex h-16 shrink-0 items-center gap-2 text-sm leading-6 transition after:absolute after:inset-x-0 after:bottom-0 after:h-px",
                                                 active
@@ -102,9 +104,11 @@ export function AppTopNav() {
                                     />
                                     <VersionReleaseModal />
                                     <GitHubLink />
-                                    <Link href="/login" className="text-sm font-medium text-stone-600 underline-offset-4 transition hover:text-stone-950 hover:underline dark:text-stone-300 dark:hover:text-stone-100">
-                                        登录
-                                    </Link>
+                                    {!sub2apiEmbedded ? (
+                                        <Link href="/login" className="text-sm font-medium text-stone-600 underline-offset-4 transition hover:text-stone-950 hover:underline dark:text-stone-300 dark:hover:text-stone-100">
+                                            登录
+                                        </Link>
+                                    ) : null}
                                 </>
                             )}
                         </div>

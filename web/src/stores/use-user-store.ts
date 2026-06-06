@@ -11,10 +11,11 @@ type UserStore = {
     isReady: boolean;
     isLoading: boolean;
     isEmbedLoginFailed: boolean;
+    embedLoginError: string;
     setSession: (token: string, user: AuthUser) => void;
     clearSession: () => void;
     beginEmbedLogin: () => void;
-    failEmbedLogin: () => void;
+    failEmbedLogin: (error?: string) => void;
     hydrateUser: () => Promise<void>;
     login: (payload: AuthPayload) => Promise<AuthUser>;
     register: (payload: AuthPayload) => Promise<AuthUser>;
@@ -28,10 +29,11 @@ export const useUserStore = create<UserStore>()(
             isReady: false,
             isLoading: false,
             isEmbedLoginFailed: false,
-            setSession: (token, user) => set({ token, user, isReady: true, isLoading: false, isEmbedLoginFailed: false }),
-            clearSession: () => set({ token: "", user: null, isReady: true, isLoading: false, isEmbedLoginFailed: false }),
-            beginEmbedLogin: () => set({ token: "", user: null, isReady: false, isLoading: true, isEmbedLoginFailed: false }),
-            failEmbedLogin: () => set({ isReady: true, isLoading: false, isEmbedLoginFailed: true }),
+            embedLoginError: "",
+            setSession: (token, user) => set({ token, user, isReady: true, isLoading: false, isEmbedLoginFailed: false, embedLoginError: "" }),
+            clearSession: () => set({ token: "", user: null, isReady: true, isLoading: false, isEmbedLoginFailed: false, embedLoginError: "" }),
+            beginEmbedLogin: () => set({ token: "", user: null, isReady: false, isLoading: true, isEmbedLoginFailed: false, embedLoginError: "" }),
+            failEmbedLogin: (error) => set({ isReady: true, isLoading: false, isEmbedLoginFailed: true, embedLoginError: error || "Sub2API 登录状态无效，请刷新 Sub2API 页面后重试" }),
             hydrateUser: async () => {
                 const token = get().token;
                 if (!token) {

@@ -13,6 +13,7 @@ import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { CreditSymbol } from "@/constant/credits";
 import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { isSub2APIEmbedded, withSub2APIEmbedParams } from "@/lib/sub2api-embed";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -47,10 +48,11 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     const gitHubClassName = variant === "canvas" ? "size-11 text-base" : undefined;
     const gitHubStyle = iconStyle;
     const avatarStyle: CSSProperties | undefined = variant === "canvas" ? { borderColor: canvasTheme.toolbar.border, color: canvasTheme.node.text, background: "transparent" } : undefined;
+    const sub2apiEmbedded = isSub2APIEmbedded();
     const handleLogout = () => {
         logout();
         onAccountOpenChange?.(false);
-        router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
+        router.replace(sub2apiEmbedded ? withSub2APIEmbedParams("/canvas") : `/login?redirect=${encodeURIComponent(pathname)}`);
     };
     const menuItems: ItemType[] = [
         { key: "user", disabled: true, label: <span className="font-medium text-current">{userName}</span> },
@@ -83,7 +85,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                     <Keyboard className="size-4" />
                 </button>
             ) : null}
-            {isReady && !user ? (
+            {isReady && !user && !sub2apiEmbedded ? (
                 <Link href="/login" className="px-1.5 text-sm font-medium text-stone-600 underline-offset-4 transition hover:text-stone-950 hover:underline dark:text-stone-300 dark:hover:text-stone-100" style={iconStyle}>
                     登录
                 </Link>

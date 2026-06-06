@@ -13,6 +13,7 @@ import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadIma
 import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { formatBytes, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
+import { withSub2APIEmbedParams } from "@/lib/sub2api-embed";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { useAssetStore } from "@/stores/use-asset-store";
@@ -383,7 +384,7 @@ function InfiniteCanvasPage() {
         setProjectLoaded(false);
         const project = openProject(projectId);
         if (!project) {
-            router.replace("/canvas");
+            router.replace(withSub2APIEmbedParams("/canvas"));
             return;
         }
 
@@ -954,13 +955,13 @@ function InfiniteCanvasPage() {
 
     const createAndOpenProject = useCallback(() => {
         const id = createProject(`无限画布 ${useCanvasStore.getState().projects.length + 1}`);
-        router.push(`/canvas/${id}`);
+        router.push(withSub2APIEmbedParams(`/canvas/${id}`));
     }, [createProject, router]);
 
     const deleteCurrentProject = useCallback(() => {
         deleteProjects([projectId]);
         cleanupAssetImages();
-        router.push("/canvas");
+        router.push(withSub2APIEmbedParams("/canvas"));
     }, [cleanupAssetImages, deleteProjects, projectId, router]);
 
     const handleCanvasMouseDown = useCallback(
@@ -2408,8 +2409,8 @@ function InfiniteCanvasPage() {
                     onCancelTitleEditing={() => setTitleEditing(false)}
                     canUndo={historyState.canUndo}
                     canRedo={historyState.canRedo}
-                    onHome={() => router.push("/")}
-                    onProjects={() => router.push("/canvas")}
+                    onHome={() => router.push(withSub2APIEmbedParams("/"))}
+                    onProjects={() => router.push(withSub2APIEmbedParams("/canvas"))}
                     onCreateProject={createAndOpenProject}
                     onDeleteProject={deleteCurrentProject}
                     onImportImage={() => handleUploadRequest()}
@@ -2923,13 +2924,13 @@ function CanvasTopBar({
                         trigger={["click"]}
                         menu={{
                             items: [
-                                { key: "home", icon: <Home className="size-4" />, label: "系统主页", onClick: () => router.push("/") },
+                                { key: "home", icon: <Home className="size-4" />, label: "系统主页", onClick: () => router.push(withSub2APIEmbedParams("/")) },
                                 { type: "divider" },
-                                { key: "nav-canvas", icon: <Maximize2 className="size-4" />, label: "我的画布", onClick: () => router.push("/canvas") },
-                                { key: "nav-image", icon: <ImagePlus className="size-4" />, label: "生图工作台", onClick: () => router.push("/image") },
-                                { key: "nav-video", icon: <Video className="size-4" />, label: "视频创作台", onClick: () => router.push("/video") },
-                                { key: "nav-prompts", icon: <FileText className="size-4" />, label: "提示词库", onClick: () => router.push("/prompts") },
-                                { key: "nav-assets", icon: <Images className="size-4" />, label: "我的素材", onClick: () => router.push("/assets") },
+                                { key: "nav-canvas", icon: <Maximize2 className="size-4" />, label: "我的画布", onClick: () => router.push(withSub2APIEmbedParams("/canvas")) },
+                                { key: "nav-image", icon: <ImagePlus className="size-4" />, label: "生图工作台", onClick: () => router.push(withSub2APIEmbedParams("/image")) },
+                                { key: "nav-video", icon: <Video className="size-4" />, label: "视频创作台", onClick: () => router.push(withSub2APIEmbedParams("/video")) },
+                                { key: "nav-prompts", icon: <FileText className="size-4" />, label: "提示词库", onClick: () => router.push(withSub2APIEmbedParams("/prompts")) },
+                                { key: "nav-assets", icon: <Images className="size-4" />, label: "我的素材", onClick: () => router.push(withSub2APIEmbedParams("/assets")) },
                             ],
                         }}
                     >

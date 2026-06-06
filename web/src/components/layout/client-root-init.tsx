@@ -58,7 +58,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                     .catch((error) => console.warn("Sub2API 嵌入配置失败", error));
             })
             .catch((error) => {
-                failEmbedLogin();
+                failEmbedLogin(error instanceof Error ? error.message : undefined);
                 console.warn("Sub2API 嵌入登录失败", error);
             });
     }, [beginEmbedLogin, failEmbedLogin, setSession, updateConfig]);

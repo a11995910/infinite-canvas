@@ -27,6 +27,7 @@ export type Sub2APIEmbedConfig = {
 
 export const SUB2API_EMBED_CHANNEL_ID = "sub2api-embedded";
 export const SUB2API_EMBED_MODEL_FALLBACKS = ["gpt-image-2", "gpt-5.5", "Agnes-Video-V2.0"];
+const SUB2API_EMBED_QUERY_KEYS = ["ui_mode", "token", "src_host", "src_url", "theme", "lang"] as const;
 
 export function readSub2APIEmbedParams(): Sub2APIEmbedParams {
     if (typeof window === "undefined") return { embedded: false, token: "", srcHost: "" };
@@ -41,6 +42,19 @@ export function readSub2APIEmbedParams(): Sub2APIEmbedParams {
 export function isSub2APIEmbedded() {
     const params = readSub2APIEmbedParams();
     return params.embedded && !!params.token && !!params.srcHost;
+}
+
+export function withSub2APIEmbedParams(path: string) {
+    if (typeof window === "undefined") return path;
+    const currentParams = new URLSearchParams(window.location.search);
+    if (currentParams.get("ui_mode") !== "embedded" || !currentParams.get("token") || !currentParams.get("src_host")) return path;
+
+    const target = new URL(path, window.location.origin);
+    SUB2API_EMBED_QUERY_KEYS.forEach((key) => {
+        const value = currentParams.get(key);
+        if (value && !target.searchParams.has(key)) target.searchParams.set(key, value);
+    });
+    return `${target.pathname}${target.search}${target.hash}`;
 }
 
 export function chooseSub2APIKey(keys: Sub2APIEmbedKey[]) {
