@@ -6,12 +6,13 @@ import { ReloadOutlined } from "@ant-design/icons";
 
 import { ModelPicker } from "@/components/model-picker";
 import { fetchImageModels } from "@/services/api/image";
+import { fetchSub2APIEmbedConfig } from "@/services/api/sub2api-embed";
 import { fetchUserConfig, measureUserStorageProvider, syncUserModelConfig, syncUserStorageProvider } from "@/services/api/user-config";
 import { defaultUserStorageProvider, saveUserStorageProvider, USER_STORAGE_PROVIDER_KEY, type UserStorageProvider, clearStorageConfigCache as clearImageStorageCache } from "@/services/image-storage";
 import { clearStorageConfigCache as clearFileStorageCache } from "@/services/file-storage";
 import { normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
-import { isSub2APIEmbedded } from "@/lib/sub2api-embed";
+import { buildSub2APIEmbedConfig, isSub2APIEmbedded, readSub2APIEmbedParams, SUB2API_EMBED_CHANNEL_ID, type Sub2APIEmbedConfig, type Sub2APIEmbedKey } from "@/lib/sub2api-embed";
 
 export function AppConfigModal() {
     const { message, modal } = App.useApp();
@@ -40,6 +41,8 @@ export function AppConfigModal() {
     const [saving, setSaving] = useState(false);
     const [migrating, setMigrating] = useState(false);
     const [migrationProgress, setMigrationProgress] = useState({ current: 0, total: 0 });
+    const [embedConfig, setEmbedConfig] = useState<Sub2APIEmbedConfig | null>(null);
+    const [loadingEmbedConfig, setLoadingEmbedConfig] = useState(false);
 
     const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
     const [selectingChannelId, setSelectingChannelId] = useState("");
@@ -56,7 +59,7 @@ export function AppConfigModal() {
         } catch {
             setUserStorage(defaultUserStorageProvider());
         }
-        if (!isConfigOpen || !token) return;
+        if (!isConfigOpen || !token || sub2apiEmbedded) return;
         void fetchUserConfig(token)
             .then((payload) => {
                 let syncModel = false;
@@ -92,10 +95,31 @@ export function AppConfigModal() {
                 }
             })
             .catch(() => {});
-    }, [isConfigOpen, token, updateConfig]);
+    }, [isConfigOpen, sub2apiEmbedded, token, updateConfig]);
+
+    async function loadSub2APIEmbedConfig() {
+        const embed = readSub2APIEmbedParams();
+        if (!embed.token || !embed.srcHost) return;
+
+        setLoadingEmbedConfig(true);
+        try {
+            const payload = await fetchSub2APIEmbedConfig({ token: embed.token, srcHost: embed.srcHost });
+            setEmbedConfig(payload);
+            await applySub2APIEmbedConfig(payload);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "读取 Sub2API Key 失败");
+        } finally {
+            setLoadingEmbedConfig(false);
+        }
+    }
+
+    useEffect(() => {
+        if (!isConfigOpen || !sub2apiEmbedded) return;
+        void loadSub2APIEmbedConfig();
+    }, [isConfigOpen, message, sub2apiEmbedded, updateConfig]);
 
     const finishConfig = async () => {
-        if (allowUserStorageProvider) saveUserStorageProvider(userStorage);
+        if (!sub2apiEmbedded && allowUserStorageProvider) saveUserStorageProvider(userStorage);
         if (!allowCustomChannel && config.channelMode !== "remote") updateConfig("channelMode", "remote");
 
         const isLocalIncomplete = effectiveMode === "local" && (!config.baseUrl.trim() || !config.apiKey.trim());
@@ -103,7 +127,7 @@ export function AppConfigModal() {
 
         setSaving(true);
         try {
-            if (token) {
+            if (token && !sub2apiEmbedded) {
                 if (config.syncModelConfig) {
                     await syncUserModelConfig(token, config);
                 } else {
@@ -116,7 +140,7 @@ export function AppConfigModal() {
                     });
                 }
             }
-            if (token && allowUserStorageProvider) {
+            if (token && !sub2apiEmbedded && allowUserStorageProvider) {
                 if (config.syncStorageConfig) {
                     await syncUserStorageProvider(token, userStorage);
                 } else {
@@ -135,7 +159,7 @@ export function AppConfigModal() {
             clearFileStorageCache();
 
             let cloudSyncActive = false;
-            if (token) {
+            if (token && !sub2apiEmbedded) {
                 const userConfig = await fetchUserConfig(token);
                 cloudSyncActive = userConfig.syncCapabilities?.userData === true && userConfig.syncCapabilities?.assets === true;
                 
@@ -347,6 +371,23 @@ export function AppConfigModal() {
 
     const uniqueModels = (arr: string[]) => Array.from(new Set(arr.filter(Boolean)));
 
+    const applySub2APIEmbedConfig = async (payload: Sub2APIEmbedConfig, selectedKey?: Sub2APIEmbedKey) => {
+        const baseConfig = buildSub2APIEmbedConfig(useConfigStore.getState().config, payload, selectedKey);
+        Object.entries(baseConfig).forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
+
+        setLoadingModels(true);
+        try {
+            const models = uniqueModels(await fetchImageModels(baseConfig));
+            if (!models.length) return;
+            const nextConfig = buildSub2APIEmbedConfig(useConfigStore.getState().config, payload, selectedKey, models);
+            Object.entries(nextConfig).forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
+        } catch (error) {
+            console.warn("读取 Sub2API 模型列表失败", error);
+        } finally {
+            setLoadingModels(false);
+        }
+    };
+
     const refreshLocalChannelModels = async (channel: LocalModelChannel) => {
         if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
             message.error("请先填写该渠道的 Base URL 和 API Key");
@@ -439,6 +480,23 @@ export function AppConfigModal() {
         closeChannelModelSelector();
     };
 
+    const activeEmbedKeys = (embedConfig?.keys || []).filter((item) => item.status === "active" && item.key);
+    const selectedEmbedKey = activeEmbedKeys.find((item) => item.key === normalizeLocalChannels(config).find((channel) => channel.id === SUB2API_EMBED_CHANNEL_ID)?.apiKey) || embedConfig?.selectedKey || activeEmbedKeys[0];
+    const selectedEmbedKeyId = selectedEmbedKey ? String(selectedEmbedKey.id) : undefined;
+
+    const selectSub2APIKey = (keyId: string) => {
+        if (!embedConfig) return;
+        const selectedKey = activeEmbedKeys.find((item) => String(item.id) === keyId) || embedConfig.selectedKey;
+        void applySub2APIEmbedConfig(embedConfig, selectedKey);
+    };
+
+    const sub2APIKeyLabel = (key: Sub2APIEmbedKey) => {
+        const name = key.name || `Key #${key.id}`;
+        const group = key.group?.name || "默认分组";
+        const capability = key.group?.allow_image_generation ? "图片可用" : "文本可用";
+        return `${name} · ${group} · ${capability}`;
+    };
+
     return (
         <>
             <Modal
@@ -461,10 +519,34 @@ export function AppConfigModal() {
             <div className="pt-1">
                 <Form layout="vertical" requiredMark={false}>
                     {sub2apiEmbedded ? (
-                        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
-                            已连接 Sub2API，当前画布会优先使用 Sub2API 账号中的可用 API Key。
-                        </div>
-                    ) : null}
+                        <>
+                            <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+                                已连接 Sub2API，当前画布会使用你在 Sub2API 账号中的 API Key。
+                            </div>
+                            <Form.Item label="Sub2API Key" className="mb-4">
+                                <Select
+                                    value={selectedEmbedKeyId}
+                                    loading={loadingEmbedConfig}
+                                    placeholder={loadingEmbedConfig ? "正在读取 Key" : "选择当前账号的 Key"}
+                                    onChange={selectSub2APIKey}
+                                    options={activeEmbedKeys.map((key) => ({ label: sub2APIKeyLabel(key), value: String(key.id) }))}
+                                    notFoundContent={loadingEmbedConfig ? "正在读取 Key" : "当前账号没有可用 Key"}
+                                />
+                            </Form.Item>
+                            <div className="grid gap-4 md:grid-cols-3">
+                                <Form.Item label="图片模型" className="mb-4">
+                                    <ModelPicker config={modelConfig} value={modelConfig.imageModel} channelId={modelConfig.imageChannelId} onChange={(model, channelId) => { updateConfig("imageModel", model); if (channelId) updateConfig("imageChannelId", channelId); }} fullWidth />
+                                </Form.Item>
+                                <Form.Item label="文本模型" className="mb-4">
+                                    <ModelPicker config={modelConfig} value={modelConfig.textModel} channelId={modelConfig.textChannelId} onChange={(model, channelId) => { updateConfig("textModel", model); if (channelId) updateConfig("textChannelId", channelId); }} fullWidth />
+                                </Form.Item>
+                                <Form.Item label="视频模型（预留）" className="mb-4">
+                                    <ModelPicker config={modelConfig} value={modelConfig.videoModel} channelId={modelConfig.videoChannelId} onChange={(model, channelId) => { updateConfig("videoModel", model); if (channelId) updateConfig("videoChannelId", channelId); }} fullWidth />
+                                </Form.Item>
+                            </div>
+                        </>
+                    ) : (
+                        <>
                     {allowCustomChannel ? (
                         <Form.Item label="渠道模式" className="mb-4">
                             <Segmented
@@ -622,6 +704,8 @@ export function AppConfigModal() {
                             <Input.TextArea rows={3} value={config.systemPrompt} placeholder="例如：你是一位擅长电影感写实摄影的视觉导演。" onChange={(event) => updateConfig("systemPrompt", event.target.value)} />
                         </Form.Item>
                     ) : null}
+                        </>
+                    )}
                 </Form>
             </div>
         </Modal>

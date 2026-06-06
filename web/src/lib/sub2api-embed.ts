@@ -54,8 +54,8 @@ export function chooseSub2APIKey(keys: Sub2APIEmbedKey[]) {
     );
 }
 
-export function buildSub2APIEmbedConfig(config: AiConfig, payload: Sub2APIEmbedConfig): AiConfig {
-    const channel = buildSub2APIEmbedChannel(payload);
+export function buildSub2APIEmbedConfig(config: AiConfig, payload: Sub2APIEmbedConfig, selectedKey?: Sub2APIEmbedKey, channelModels?: string[]): AiConfig {
+    const channel = buildSub2APIEmbedChannel(payload, selectedKey || resolveSub2APIEmbedKey(config, payload), channelModels);
     const currentChannels = config.localChannels.filter((item) => item.id !== SUB2API_EMBED_CHANNEL_ID);
     const channels = [channel, ...currentChannels];
     const models = Array.from(new Set(channels.flatMap((item) => item.models)));
@@ -104,15 +104,20 @@ export function clearSub2APIEmbedConfig(config: AiConfig): AiConfig {
 
 export function hasSub2APIEmbedChannel(config: AiConfig, payload: Sub2APIEmbedConfig) {
     const channel = config.localChannels.find((item) => item.id === SUB2API_EMBED_CHANNEL_ID);
-    return channel?.apiKey === payload.selectedKey.key && channel.baseUrl === payload.proxyBaseUrl;
+    return channel?.baseUrl === payload.proxyBaseUrl && payload.keys.some((key) => key.status === "active" && key.key && key.key === channel.apiKey);
 }
 
-function buildSub2APIEmbedChannel(payload: Sub2APIEmbedConfig): LocalModelChannel {
+function resolveSub2APIEmbedKey(config: AiConfig, payload: Sub2APIEmbedConfig) {
+    const currentKey = config.localChannels.find((item) => item.id === SUB2API_EMBED_CHANNEL_ID)?.apiKey || config.apiKey;
+    return payload.keys.find((key) => key.status === "active" && key.key && key.key === currentKey) || payload.selectedKey;
+}
+
+function buildSub2APIEmbedChannel(payload: Sub2APIEmbedConfig, selectedKey: Sub2APIEmbedKey, models?: string[]): LocalModelChannel {
     return {
         id: SUB2API_EMBED_CHANNEL_ID,
-        name: `Sub2API：${payload.selectedKey.group?.name || payload.selectedKey.name || "当前账号"}`,
+        name: `Sub2API：${selectedKey.group?.name || selectedKey.name || "当前账号"}`,
         baseUrl: payload.proxyBaseUrl,
-        apiKey: payload.selectedKey.key,
-        models: SUB2API_EMBED_MODEL_FALLBACKS,
+        apiKey: selectedKey.key,
+        models: models?.length ? models : SUB2API_EMBED_MODEL_FALLBACKS,
     };
 }
