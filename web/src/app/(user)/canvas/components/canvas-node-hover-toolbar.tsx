@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Modal, Segmented, Tooltip } from "antd";
-import { Camera, Download, FolderPlus, Image as ImageIcon, Info, Lock, LockOpen, Maximize2, MessageSquare, Minus, Pencil, Plus, RefreshCw, Scissors, Settings2, Trash2, Upload, Video } from "lucide-react";
+import { Camera, Download, FolderPlus, Image as ImageIcon, Info, Lock, LockOpen, Maximize2, MessageSquare, Minus, PackageOpen, Pencil, Plus, RefreshCw, Scissors, Settings2, Trash2, Upload, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
@@ -24,6 +24,7 @@ type CanvasNodeHoverToolbarProps = {
     onDownload: (node: CanvasNodeData) => void;
     onSaveAsset: (node: CanvasNodeData) => void;
     onCrop: (node: CanvasNodeData) => void;
+    onStrictSplit: (node: CanvasNodeData) => void;
     onAngle: (node: CanvasNodeData) => void;
     onViewImage: (node: CanvasNodeData) => void;
     onRetry: (node: CanvasNodeData) => void;
@@ -46,6 +47,7 @@ export function CanvasNodeHoverToolbar({
     onDownload,
     onSaveAsset,
     onCrop,
+    onStrictSplit,
     onAngle,
     onViewImage,
     onRetry,
@@ -99,6 +101,7 @@ export function CanvasNodeHoverToolbar({
                 />
             ) : null}
             {hasImage ? <ToolbarAction title="裁剪并生成新节点" label="裁剪" icon={<Scissors className="size-4" />} onClick={() => onCrop(node)} /> : null}
+            {hasImage ? <ToolbarAction title="一键严格拆分图中主体物件" label="拆物件" icon={<PackageOpen className="size-4" />} onClick={() => onStrictSplit(node)} /> : null}
             {hasImage ? <ToolbarAction title="生成角度" label="多角度" icon={<Camera className="size-4" />} onClick={() => onAngle(node)} /> : null}
             {hasImage ? <ToolbarAction title="查看图片详情" label="查看大图" icon={<Maximize2 className="size-4" />} onClick={() => onViewImage(node)} /> : null}
         </div>

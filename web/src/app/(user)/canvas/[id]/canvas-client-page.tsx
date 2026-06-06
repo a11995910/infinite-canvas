@@ -9,7 +9,7 @@ import { saveAs } from "file-saver";
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestVideoGeneration } from "@/services/api/video";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
+import { collectImageStorageKeys, deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
 import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { formatBytes, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
@@ -64,6 +64,12 @@ type PendingConnectionCreate = {
     position: Position;
 };
 
+type StrictSplitItem = {
+    name: string;
+    description: string;
+    bbox?: [number, number, number, number];
+};
+
 type CanvasHistoryEntry = Pick<CanvasClipboard, "nodes" | "connections"> & {
     chatSessions: CanvasAssistantSession[];
     activeChatId: string | null;
@@ -73,6 +79,7 @@ type CanvasHistoryEntry = Pick<CanvasClipboard, "nodes" | "connections"> & {
 
 const VIDEO_NODE_MAX_WIDTH = 420;
 const VIDEO_NODE_MAX_HEIGHT = 420;
+const STRICT_SPLIT_MAX_ITEMS = 8;
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
@@ -1555,6 +1562,125 @@ function InfiniteCanvasPage() {
         setCropNodeId(null);
     }, []);
 
+    const strictSplitImageNode = useCallback(
+        async (node: CanvasNodeData) => {
+            if (!node.metadata?.content) return message.error("没有可拆分的图片");
+            const textConfig = { ...buildGenerationConfig(effectiveConfig, undefined, "text"), count: "1" };
+            const imageConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" };
+            if (!isAiConfigReady(textConfig, textConfig.model) || !isAiConfigReady(imageConfig, imageConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+
+            setToolbarNodeId(null);
+            setRunningNodeId(node.id);
+            const hideLoading = message.loading("正在识别可拆分物件...", 0);
+            try {
+                const reference: ReferenceImage = {
+                    id: node.id,
+                    name: `${node.title || node.id}.png`,
+                    type: node.metadata.mimeType || "image/png",
+                    dataUrl: await imageToDataUrl({ dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }),
+                    storageKey: node.metadata.storageKey,
+                };
+                const answer = await requestImageQuestion(textConfig, buildStrictSplitMessages(reference.dataUrl), () => {});
+                const items = parseStrictSplitItems(answer);
+                if (!items.length) {
+                    message.warning("没有识别到适合拆分的主体物件");
+                    return;
+                }
+
+                hideLoading();
+                message.loading(`已识别 ${items.length} 个物件，正在拆分...`, 2);
+                const imageNodeSize = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
+                const generationMetadata = buildImageGenerationMetadata("edit", imageConfig, 1, [reference]);
+                const childNodes: CanvasNodeData[] = items.map((item, index) => ({
+                    id: nanoid(),
+                    type: CanvasNodeType.Image,
+                    title: `拆分：${item.name}`.slice(0, 32),
+                    position: {
+                        x: node.position.x + node.width + 96 + (index % 2) * (imageNodeSize.width + 36),
+                        y: node.position.y + Math.floor(index / 2) * (imageNodeSize.height + 36),
+                    },
+                    width: imageNodeSize.width,
+                    height: imageNodeSize.height,
+                    metadata: {
+                        prompt: buildStrictSplitPrompt(item),
+                        status: NODE_STATUS_LOADING,
+                        startedAt: Date.now(),
+                        durationMs: undefined,
+                        ...generationMetadata,
+                    },
+                }));
+                const childIds = childNodes.map((child) => child.id);
+                setNodes((prev) => [...prev, ...childNodes]);
+                setConnections((prev) => [...prev, ...childIds.map((childId) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: childId }))]);
+                setSelectedNodeIds(new Set(childIds));
+                setSelectedConnectionId(null);
+                setDialogNodeId(null);
+
+                let successCount = 0;
+                for (const [index, item] of items.entries()) {
+                    const childId = childIds[index];
+                    const prompt = buildStrictSplitPrompt(item);
+                    try {
+                        const image = await requestEdit({ ...imageConfig, seedIndex: index, seedCount: items.length }, prompt, [reference]).then((results) => results[0]);
+                        const uploaded = await uploadImage(image.dataUrl);
+                        const size = fitNodeSize(uploaded.width, uploaded.height, imageNodeSize.width, imageNodeSize.height);
+                        successCount += 1;
+                        setNodes((prev) =>
+                            prev.map((current) =>
+                                current.id === childId
+                                    ? {
+                                          ...current,
+                                          width: size.width,
+                                          height: size.height,
+                                          metadata: {
+                                              ...current.metadata,
+                                              ...imageMetadata(uploaded),
+                                              prompt,
+                                              seed: image.seed,
+                                              durationMs: Date.now() - (current.metadata?.startedAt || Date.now()),
+                                              ...generationMetadata,
+                                          },
+                                      }
+                                    : current,
+                            ),
+                        );
+                    } catch (error) {
+                        const errorDetails = error instanceof Error ? error.message : "拆分失败";
+                        setNodes((prev) =>
+                            prev.map((current) =>
+                                current.id === childId
+                                    ? {
+                                          ...current,
+                                          metadata: {
+                                              ...current.metadata,
+                                              status: NODE_STATUS_ERROR,
+                                              durationMs: Date.now() - (current.metadata?.startedAt || Date.now()),
+                                              errorDetails,
+                                          },
+                                      }
+                                    : current,
+                            ),
+                        );
+                    }
+                }
+
+                if (successCount === items.length) message.success(`已拆分 ${successCount} 个物件`);
+                else if (successCount > 0) message.warning(`已拆分 ${successCount} 个物件，${items.length - successCount} 个失败`);
+                else message.error("物件拆分失败");
+            } catch (error) {
+                const errorDetails = error instanceof Error ? error.message : "拆分失败";
+                message.error(errorDetails);
+            } finally {
+                hideLoading();
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, isAiConfigReady, message, openConfigDialog],
+    );
+
     const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
             if (!node.metadata?.content) return;
@@ -2574,6 +2700,7 @@ function InfiniteCanvasPage() {
                     onDownload={downloadNodeImage}
                     onSaveAsset={(node) => void saveNodeAsset(node)}
                     onCrop={(node) => setCropNodeId(node.id)}
+                    onStrictSplit={(node) => void strictSplitImageNode(node)}
                     onAngle={(node) => setAngleNodeId(node.id)}
                     onViewImage={(node) => setPreviewNodeId(node.id)}
                     onRetry={(node) => void handleRetryNode(node)}
@@ -3148,6 +3275,70 @@ async function hydrateAssistantImages(sessions: CanvasAssistantSession[]) {
 
 function getGenerationCount(count: string) {
     return Math.max(1, Math.min(15, Math.floor(Math.abs(Number(count)) || 1)));
+}
+
+function buildStrictSplitMessages(dataUrl: string) {
+    return [
+        {
+            role: "system" as const,
+            content:
+                "你是图片物件拆分助手。只识别图中适合独立拆出的主体物件，不要输出背景、阴影、光效、小碎片、纯文字水印或不可独立使用的装饰。只返回 JSON，不要 Markdown，不要解释。",
+        },
+        {
+            role: "user" as const,
+            content: [
+                {
+                    type: "text" as const,
+                    text: `请从这张图片中识别最多 ${STRICT_SPLIT_MAX_ITEMS} 个适合独立拆分的主体物件，按重要程度排序。返回格式必须是 {"items":[{"name":"短名称","description":"用于严格拆分的外观描述","bbox":[0,0,1,1]}]}。bbox 使用 0 到 1 的相对坐标 [x,y,width,height]，不确定可以省略。`,
+                },
+                { type: "image_url" as const, image_url: { url: dataUrl } },
+            ],
+        },
+    ];
+}
+
+function parseStrictSplitItems(answer: string): StrictSplitItem[] {
+    const json = extractJsonObject(answer);
+    if (!json) return [];
+    try {
+        const payload = JSON.parse(json) as { items?: unknown };
+        if (!Array.isArray(payload.items)) return [];
+        return payload.items.map(normalizeStrictSplitItem).filter((item): item is StrictSplitItem => Boolean(item)).slice(0, STRICT_SPLIT_MAX_ITEMS);
+    } catch {
+        return [];
+    }
+}
+
+function extractJsonObject(value: string) {
+    const trimmed = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) return trimmed;
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    return start >= 0 && end > start ? trimmed.slice(start, end + 1) : "";
+}
+
+function normalizeStrictSplitItem(value: unknown): StrictSplitItem | null {
+    if (!value || typeof value !== "object") return null;
+    const record = value as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    const description = typeof record.description === "string" ? record.description.trim() : "";
+    if (!name && !description) return null;
+    const bbox = normalizeStrictSplitBbox(record.bbox);
+    return { name: (name || description).slice(0, 24), description: description || name, ...(bbox ? { bbox } : {}) };
+}
+
+function normalizeStrictSplitBbox(value: unknown): StrictSplitItem["bbox"] | undefined {
+    if (!Array.isArray(value) || value.length !== 4) return undefined;
+    const numbers = value.map(Number);
+    if (numbers.some((number) => !Number.isFinite(number))) return undefined;
+    const [x, y, width, height] = numbers.map((number) => Math.max(0, Math.min(1, number)));
+    if (width <= 0 || height <= 0) return undefined;
+    return [x, y, width, height];
+}
+
+function buildStrictSplitPrompt(item: StrictSplitItem) {
+    const bbox = item.bbox ? `目标大致位于原图相对区域 [x=${item.bbox[0].toFixed(3)}, y=${item.bbox[1].toFixed(3)}, width=${item.bbox[2].toFixed(3)}, height=${item.bbox[3].toFixed(3)}]。` : "";
+    return `严格从参考图中拆出一个独立物件：${item.name}。${item.description} ${bbox}只保留这个物件本体，尽量完整保留原始形状、颜色、材质、纹理、光照和细节；去除其它物件、背景、阴影、文字和边框；不要新增其它元素；主体居中，透明背景或纯净白底。`;
 }
 
 function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<CanvasNodeData["metadata"]>) {
