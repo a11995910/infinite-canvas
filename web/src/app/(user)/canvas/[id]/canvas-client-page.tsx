@@ -1566,8 +1566,7 @@ function InfiniteCanvasPage() {
         async (node: CanvasNodeData) => {
             if (!node.metadata?.content) return message.error("没有可拆分的图片");
             const textConfig = { ...buildGenerationConfig(effectiveConfig, undefined, "text"), count: "1" };
-            const imageConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" };
-            if (!isAiConfigReady(textConfig, textConfig.model) || !isAiConfigReady(imageConfig, imageConfig.model)) {
+            if (!isAiConfigReady(textConfig, textConfig.model)) {
                 openConfigDialog(true);
                 return;
             }
@@ -1591,9 +1590,8 @@ function InfiniteCanvasPage() {
                 }
 
                 hideLoading();
-                message.loading(`已识别 ${items.length} 个物件，正在拆分...`, 2);
+                message.loading(`已识别 ${items.length} 个物件，正在按原图区域裁剪...`, 2);
                 const imageNodeSize = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
-                const generationMetadata = buildImageGenerationMetadata("edit", imageConfig, 1, [reference]);
                 const childNodes: CanvasNodeData[] = items.map((item, index) => ({
                     id: nanoid(),
                     type: CanvasNodeType.Image,
@@ -1609,7 +1607,8 @@ function InfiniteCanvasPage() {
                         status: NODE_STATUS_LOADING,
                         startedAt: Date.now(),
                         durationMs: undefined,
-                        ...generationMetadata,
+                        generationType: "edit",
+                        references: [referenceUrl(reference)].filter((url): url is string => Boolean(url)),
                     },
                 }));
                 const childIds = childNodes.map((child) => child.id);
@@ -1624,8 +1623,9 @@ function InfiniteCanvasPage() {
                     const childId = childIds[index];
                     const prompt = buildStrictSplitPrompt(item);
                     try {
-                        const image = await requestEdit({ ...imageConfig, seedIndex: index, seedCount: items.length }, prompt, [reference]).then((results) => results[0]);
-                        const uploaded = await uploadImage(image.dataUrl);
+                        if (!item.bbox) throw new Error("识别结果缺少 bbox，无法按原图裁剪");
+                        const cropped = await cropDataUrl(reference.dataUrl, expandStrictSplitBbox(item.bbox));
+                        const uploaded = await uploadImage(cropped);
                         const size = fitNodeSize(uploaded.width, uploaded.height, imageNodeSize.width, imageNodeSize.height);
                         successCount += 1;
                         setNodes((prev) =>
@@ -1639,9 +1639,7 @@ function InfiniteCanvasPage() {
                                               ...current.metadata,
                                               ...imageMetadata(uploaded),
                                               prompt,
-                                              seed: image.seed,
                                               durationMs: Date.now() - (current.metadata?.startedAt || Date.now()),
-                                              ...generationMetadata,
                                           },
                                       }
                                     : current,
@@ -3289,7 +3287,7 @@ function buildStrictSplitMessages(dataUrl: string) {
             content: [
                 {
                     type: "text" as const,
-                    text: `请从这张图片中识别最多 ${STRICT_SPLIT_MAX_ITEMS} 个适合独立拆分的主体物件，按重要程度排序。返回格式必须是 {"items":[{"name":"短名称","description":"用于严格拆分的外观描述","bbox":[0,0,1,1]}]}。bbox 使用 0 到 1 的相对坐标 [x,y,width,height]，不确定可以省略。`,
+                    text: `请从这张图片中识别最多 ${STRICT_SPLIT_MAX_ITEMS} 个适合独立拆分的主体物件，按重要程度排序。返回格式必须是 {"items":[{"name":"短名称","description":"用于严格裁剪的外观描述","bbox":[0,0,1,1]}]}。bbox 使用 0 到 1 的相对坐标 [x,y,width,height]，必须尽量完整包住主体；无法给出 bbox 的物件不要输出。`,
                 },
                 { type: "image_url" as const, image_url: { url: dataUrl } },
             ],
@@ -3331,14 +3329,32 @@ function normalizeStrictSplitBbox(value: unknown): StrictSplitItem["bbox"] | und
     if (!Array.isArray(value) || value.length !== 4) return undefined;
     const numbers = value.map(Number);
     if (numbers.some((number) => !Number.isFinite(number))) return undefined;
-    const [x, y, width, height] = numbers.map((number) => Math.max(0, Math.min(1, number)));
+    const [rawX, rawY, rawWidth, rawHeight] = numbers.map((number) => Math.max(0, Math.min(1, number)));
+    const x = Math.min(rawX, 0.999);
+    const y = Math.min(rawY, 0.999);
+    const width = Math.min(rawWidth, 1 - x);
+    const height = Math.min(rawHeight, 1 - y);
     if (width <= 0 || height <= 0) return undefined;
     return [x, y, width, height];
 }
 
+function expandStrictSplitBbox(bbox: [number, number, number, number]) {
+    const [x, y, width, height] = bbox;
+    const padX = Math.max(0.015, width * 0.08);
+    const padY = Math.max(0.015, height * 0.08);
+    const nextX = Math.max(0, x - padX);
+    const nextY = Math.max(0, y - padY);
+    return {
+        x: nextX,
+        y: nextY,
+        width: Math.min(1 - nextX, width + padX * 2),
+        height: Math.min(1 - nextY, height + padY * 2),
+    };
+}
+
 function buildStrictSplitPrompt(item: StrictSplitItem) {
     const bbox = item.bbox ? `目标大致位于原图相对区域 [x=${item.bbox[0].toFixed(3)}, y=${item.bbox[1].toFixed(3)}, width=${item.bbox[2].toFixed(3)}, height=${item.bbox[3].toFixed(3)}]。` : "";
-    return `严格从参考图中拆出一个独立物件：${item.name}。${item.description} ${bbox}只保留这个物件本体，尽量完整保留原始形状、颜色、材质、纹理、光照和细节；去除其它物件、背景、阴影、文字和边框；不要新增其它元素；主体居中，透明背景或纯净白底。`;
+    return `从原图按识别区域裁剪独立物件：${item.name}。${item.description} ${bbox}保留原图像素，不使用 AI 重绘。`;
 }
 
 function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<CanvasNodeData["metadata"]>) {
