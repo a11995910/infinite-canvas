@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"time"
 
 	"github.com/basketikun/infinite-canvas/model"
@@ -17,6 +18,7 @@ func ListPrompts(q model.Query) (model.PromptList, error) {
 		return model.PromptList{}, err
 	}
 	categories := promptCategoryCodes(ListPromptCategories())
+	sanitizePublicPrompts(items)
 	return model.PromptList{Items: items, Tags: tags, Categories: categories, Total: int(total)}, nil
 }
 
@@ -63,4 +65,30 @@ func promptCategoryCodes(items []model.PromptCategory) []string {
 		}
 	}
 	return codes
+}
+
+func sanitizePublicPrompts(items []model.Prompt) {
+	for i := range items {
+		items[i].GithubURL = ""
+		if isGitHubURL(items[i].CoverURL) {
+			items[i].CoverURL = ""
+		}
+		if containsGitHubURL(items[i].Preview) {
+			items[i].Preview = ""
+		}
+	}
+}
+
+func isGitHubURL(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(normalized, "https://github.com/") ||
+		strings.HasPrefix(normalized, "http://github.com/") ||
+		strings.HasPrefix(normalized, "https://raw.githubusercontent.com/") ||
+		strings.HasPrefix(normalized, "http://raw.githubusercontent.com/")
+}
+
+func containsGitHubURL(value string) bool {
+	normalized := strings.ToLower(value)
+	return strings.Contains(normalized, "github.com/") ||
+		strings.Contains(normalized, "raw.githubusercontent.com/")
 }

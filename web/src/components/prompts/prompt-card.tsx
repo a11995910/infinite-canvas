@@ -6,6 +6,8 @@ import { Button, Card, Tag } from "antd";
 
 import { formatPromptDate, type Prompt } from "@/services/api/prompts";
 
+const fallbackCoverUrl = "/logo.svg";
+
 export function PromptCard({
     item,
     onOpen,
@@ -23,6 +25,8 @@ export function PromptCard({
     actionType?: "text" | "primary";
     extraAction?: ReactNode;
 }) {
+    const coverUrl = item.coverUrl || fallbackCoverUrl;
+
     return (
         <Card
             hoverable
@@ -30,7 +34,7 @@ export function PromptCard({
             styles={{ body: { padding: 0 } }}
             cover={
                 <button type="button" className="block w-full text-left" onClick={onOpen}>
-                    <img src={item.coverUrl} alt={item.title} className="aspect-[4/3] w-full object-cover" />
+                    <img src={coverUrl} alt={item.title} className="aspect-[4/3] w-full object-cover" />
                 </button>
             }
         >
