@@ -60,6 +60,7 @@ export type AiConfig = {
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const SUB2API_EMBED_CHANNEL_ID = "sub2api-embedded";
+const SUB2API_EMBED_CHANNEL_IDS = new Set([SUB2API_EMBED_CHANNEL_ID, "sub2api-embedded-image", "sub2api-embedded-text", "sub2api-embedded-video"]);
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -144,7 +145,7 @@ function normalizeLocalConfig(config: AiConfig) {
 }
 
 function hasSub2APIEmbedChannel(config: AiConfig) {
-    return config.channelMode === "local" && Array.isArray(config.localChannels) && config.localChannels.some((channel) => channel.id === SUB2API_EMBED_CHANNEL_ID);
+    return config.channelMode === "local" && Array.isArray(config.localChannels) && config.localChannels.some((channel) => SUB2API_EMBED_CHANNEL_IDS.has(channel.id));
 }
 
 export function normalizeLocalChannels(config: Partial<AiConfig>) {

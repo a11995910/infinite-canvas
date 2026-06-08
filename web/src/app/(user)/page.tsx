@@ -6,6 +6,7 @@ import { App, Button, Image, Tag } from "antd";
 
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
 import { navigationTools } from "@/constant/navigation-tools";
+import { promptImageUrl } from "@/lib/prompt-images";
 import { withSub2APIEmbedParams } from "@/lib/sub2api-embed";
 import { cn } from "@/lib/utils";
 
@@ -92,7 +93,7 @@ export default function IndexPage() {
                                     index === 3 && "md:col-span-2",
                                 )}
                             >
-                                <img src={item.coverUrl || fallbackCoverUrl} alt={item.title} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                                <img src={promptImageUrl(item.coverUrl) || fallbackCoverUrl} alt={item.title} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
                                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/35 to-transparent p-4 text-white">
                                     <div className="mb-2 flex flex-wrap gap-1.5">
                                         {item.tags.slice(0, 2).map((tag, tagIndex) => (
@@ -119,7 +120,7 @@ export default function IndexPage() {
             >
                 <div className="hidden">
                     {promptShowcase.map((item) => (
-                        <Image key={item.id} src={item.coverUrl || fallbackCoverUrl} alt={item.title} />
+                        <Image key={item.id} src={promptImageUrl(item.coverUrl) || fallbackCoverUrl} alt={item.title} />
                     ))}
                 </div>
             </Image.PreviewGroup>

@@ -250,7 +250,7 @@ https://canvas.example.com
 
 Sub2API 自定义菜单的 URL 填写画布站点地址即可。Sub2API 会在 iframe URL 中追加 `ui_mode=embedded`、`token` 和 `src_host`，画布服务端会使用 `token` 调用 Sub2API 的 `/api/v1/auth/me` 校验当前用户，校验通过后创建或复用对应的画布本地账号并签发画布登录会话。iframe 内不会要求用户再次登录画布。
 
-完成登录会话后，画布会继续读取当前用户的 Sub2API Key，并把本地直连渠道自动配置为当前账号的 Sub2API 代理。登录换票和 Key 自动配置是两条独立流程：如果当前 Sub2API 用户没有可用 Key，画布仍可登录打开，只是 AI 调用渠道需要用户后续补充。
+完成登录会话后，画布会继续读取当前用户的 Sub2API Key，并把本地直连渠道自动配置为当前账号的 Sub2API 代理。嵌入配置会按用途拆成生图、文本和视频内部渠道，其中图片与视频默认使用生图 Key，文本问答、画布文本节点和工作流 Agent 使用文本 Key。登录换票和 Key 自动配置是两条独立流程：如果当前 Sub2API 用户没有可用 Key，画布仍可登录打开，只是 AI 调用渠道需要用户后续补充。
 
 生产环境建议在 `.env` 中限制允许接入的 Sub2API 来源：
 

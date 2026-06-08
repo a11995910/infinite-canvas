@@ -4,6 +4,7 @@ import { Copy } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button, Card, Tag } from "antd";
 
+import { promptImageUrl } from "@/lib/prompt-images";
 import { formatPromptDate, type Prompt } from "@/services/api/prompts";
 
 const fallbackCoverUrl = "/logo.svg";
@@ -25,7 +26,7 @@ export function PromptCard({
     actionType?: "text" | "primary";
     extraAction?: ReactNode;
 }) {
-    const coverUrl = item.coverUrl || fallbackCoverUrl;
+    const coverUrl = promptImageUrl(item.coverUrl) || fallbackCoverUrl;
 
     return (
         <Card

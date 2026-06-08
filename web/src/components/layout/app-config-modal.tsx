@@ -12,7 +12,7 @@ import { defaultUserStorageProvider, saveUserStorageProvider, USER_STORAGE_PROVI
 import { clearStorageConfigCache as clearFileStorageCache } from "@/services/file-storage";
 import { normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
-import { buildSub2APIEmbedConfig, isSub2APIEmbedded, readSub2APIEmbedParams, SUB2API_EMBED_CHANNEL_ID, type Sub2APIEmbedConfig, type Sub2APIEmbedKey } from "@/lib/sub2api-embed";
+import { buildSub2APIEmbedConfig, isSub2APIEmbedded, readSub2APIEmbedParams, sub2APIEmbedChannelId, SUB2API_EMBED_IMAGE_CHANNEL_ID, SUB2API_EMBED_TEXT_CHANNEL_ID, type Sub2APIEmbedConfig, type Sub2APIEmbedKey, type Sub2APIEmbedRole, type Sub2APIEmbedSelectedKeys } from "@/lib/sub2api-embed";
 
 export function AppConfigModal() {
     const { message, modal } = App.useApp();
@@ -371,21 +371,41 @@ export function AppConfigModal() {
 
     const uniqueModels = (arr: string[]) => Array.from(new Set(arr.filter(Boolean)));
 
-    const applySub2APIEmbedConfig = async (payload: Sub2APIEmbedConfig, selectedKey?: Sub2APIEmbedKey) => {
-        const baseConfig = buildSub2APIEmbedConfig(useConfigStore.getState().config, payload, selectedKey);
+    const applySub2APIEmbedConfig = async (payload: Sub2APIEmbedConfig, selectedKeys?: Sub2APIEmbedSelectedKeys) => {
+        const baseConfig = buildSub2APIEmbedConfig(useConfigStore.getState().config, payload, selectedKeys);
         Object.entries(baseConfig).forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
 
         setLoadingModels(true);
         try {
-            const models = uniqueModels(await fetchImageModels(baseConfig));
-            if (!models.length) return;
-            const nextConfig = buildSub2APIEmbedConfig(useConfigStore.getState().config, payload, selectedKey, models);
+            const roleModels = await loadSub2APIEmbedRoleModels(baseConfig);
+            if (!Object.values(roleModels).some((models) => models && models.length > 0)) return;
+            const nextConfig = buildSub2APIEmbedConfig(useConfigStore.getState().config, payload, selectedKeys, roleModels);
             Object.entries(nextConfig).forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
         } catch (error) {
             console.warn("读取 Sub2API 模型列表失败", error);
         } finally {
             setLoadingModels(false);
         }
+    };
+
+    const loadSub2APIEmbedRoleModels = async (baseConfig: AiConfig): Promise<Partial<Record<Sub2APIEmbedRole, string[]>>> => {
+        const entries = await Promise.all(
+            (["image", "text", "video"] as Sub2APIEmbedRole[]).map(async (role) => {
+                const channel = baseConfig.localChannels.find((item) => item.id === sub2APIEmbedChannelId(role));
+                if (!channel) return [role, []] as const;
+                try {
+                    const models = await fetchImageModels({ ...baseConfig, channelMode: "local", baseUrl: channel.baseUrl, apiKey: channel.apiKey, localChannels: [{ ...channel, models: channel.models }], model: channel.models[0] || baseConfig.model });
+                    return [role, uniqueModels(models)] as const;
+                } catch (error) {
+                    console.warn(`读取 Sub2API ${role} 模型列表失败`, error);
+                    return [role, []] as const;
+                }
+            }),
+        );
+        return entries.reduce<Partial<Record<Sub2APIEmbedRole, string[]>>>((result, [role, models]) => {
+            if (models.length) result[role] = models;
+            return result;
+        }, {});
     };
 
     const refreshLocalChannelModels = async (channel: LocalModelChannel) => {
@@ -481,13 +501,20 @@ export function AppConfigModal() {
     };
 
     const activeEmbedKeys = (embedConfig?.keys || []).filter((item) => item.status === "active" && item.key);
-    const selectedEmbedKey = activeEmbedKeys.find((item) => item.key === normalizeLocalChannels(config).find((channel) => channel.id === SUB2API_EMBED_CHANNEL_ID)?.apiKey) || embedConfig?.selectedKey || activeEmbedKeys[0];
-    const selectedEmbedKeyId = selectedEmbedKey ? String(selectedEmbedKey.id) : undefined;
+    const embedChannels = normalizeLocalChannels(config);
+    const selectedImageEmbedKey = activeEmbedKeys.find((item) => item.key === embedChannels.find((channel) => channel.id === SUB2API_EMBED_IMAGE_CHANNEL_ID)?.apiKey) || embedConfig?.selectedImageKey || embedConfig?.selectedKey || activeEmbedKeys[0];
+    const selectedTextEmbedKey = activeEmbedKeys.find((item) => item.key === embedChannels.find((channel) => channel.id === SUB2API_EMBED_TEXT_CHANNEL_ID)?.apiKey) || embedConfig?.selectedTextKey || selectedImageEmbedKey || activeEmbedKeys[0];
+    const selectedImageEmbedKeyId = selectedImageEmbedKey ? String(selectedImageEmbedKey.id) : undefined;
+    const selectedTextEmbedKeyId = selectedTextEmbedKey ? String(selectedTextEmbedKey.id) : undefined;
 
-    const selectSub2APIKey = (keyId: string) => {
+    const selectSub2APIKey = (role: "image" | "text", keyId: string) => {
         if (!embedConfig) return;
         const selectedKey = activeEmbedKeys.find((item) => String(item.id) === keyId) || embedConfig.selectedKey;
-        void applySub2APIEmbedConfig(embedConfig, selectedKey);
+        void applySub2APIEmbedConfig(embedConfig, {
+            image: role === "image" ? selectedKey : selectedImageEmbedKey,
+            video: role === "image" ? selectedKey : selectedImageEmbedKey,
+            text: role === "text" ? selectedKey : selectedTextEmbedKey,
+        });
     };
 
     const sub2APIKeyLabel = (key: Sub2APIEmbedKey) => {
@@ -495,6 +522,24 @@ export function AppConfigModal() {
         const group = key.group?.name || "默认分组";
         const capability = key.group?.allow_image_generation ? "图片可用" : "文本可用";
         return `${name} · ${group} · ${capability}`;
+    };
+
+    const sub2APIModelConfig = (role: Sub2APIEmbedRole) => {
+        const channelId = sub2APIEmbedChannelId(role);
+        const channel = normalizeLocalChannels(config).find((item) => item.id === channelId);
+        const localChannels = channel ? [channel] : [];
+        const models = localChannels.flatMap((item) => item.models);
+        return {
+            ...modelConfig,
+            channelMode: "local" as const,
+            localChannels,
+            models,
+            publicChannels: [],
+            activeChannelId: channelId,
+            imageChannelId: role === "image" ? channelId : modelConfig.imageChannelId,
+            textChannelId: role === "text" ? channelId : modelConfig.textChannelId,
+            videoChannelId: role === "video" ? channelId : modelConfig.videoChannelId,
+        };
     };
 
     return (
@@ -521,27 +566,39 @@ export function AppConfigModal() {
                     {sub2apiEmbedded ? (
                         <>
                             <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
-                                已连接 Sub2API，当前画布会使用你在 Sub2API 账号中的 API Key。
+                                已连接 Sub2API，当前画布会按图片和文本用途分别使用你在 Sub2API 账号中的 API Key。
                             </div>
-                            <Form.Item label="Sub2API Key" className="mb-4">
-                                <Select
-                                    value={selectedEmbedKeyId}
-                                    loading={loadingEmbedConfig}
-                                    placeholder={loadingEmbedConfig ? "正在读取 Key" : "选择当前账号的 Key"}
-                                    onChange={selectSub2APIKey}
-                                    options={activeEmbedKeys.map((key) => ({ label: sub2APIKeyLabel(key), value: String(key.id) }))}
-                                    notFoundContent={loadingEmbedConfig ? "正在读取 Key" : "当前账号没有可用 Key"}
-                                />
-                            </Form.Item>
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <Form.Item label="生图 Key" className="mb-4">
+                                    <Select
+                                        value={selectedImageEmbedKeyId}
+                                        loading={loadingEmbedConfig}
+                                        placeholder={loadingEmbedConfig ? "正在读取 Key" : "选择生图 Key"}
+                                        onChange={(value) => selectSub2APIKey("image", value)}
+                                        options={activeEmbedKeys.map((key) => ({ label: sub2APIKeyLabel(key), value: String(key.id) }))}
+                                        notFoundContent={loadingEmbedConfig ? "正在读取 Key" : "当前账号没有可用 Key"}
+                                    />
+                                </Form.Item>
+                                <Form.Item label="文本 Key" className="mb-4">
+                                    <Select
+                                        value={selectedTextEmbedKeyId}
+                                        loading={loadingEmbedConfig}
+                                        placeholder={loadingEmbedConfig ? "正在读取 Key" : "选择文本 Key"}
+                                        onChange={(value) => selectSub2APIKey("text", value)}
+                                        options={activeEmbedKeys.map((key) => ({ label: sub2APIKeyLabel(key), value: String(key.id) }))}
+                                        notFoundContent={loadingEmbedConfig ? "正在读取 Key" : "当前账号没有可用 Key"}
+                                    />
+                                </Form.Item>
+                            </div>
                             <div className="grid gap-4 md:grid-cols-3">
                                 <Form.Item label="图片模型" className="mb-4">
-                                    <ModelPicker config={modelConfig} value={modelConfig.imageModel} channelId={modelConfig.imageChannelId} onChange={(model, channelId) => { updateConfig("imageModel", model); if (channelId) updateConfig("imageChannelId", channelId); }} fullWidth />
+                                    <ModelPicker config={sub2APIModelConfig("image")} value={modelConfig.imageModel} channelId={modelConfig.imageChannelId} onChange={(model, channelId) => { updateConfig("imageModel", model); if (channelId) updateConfig("imageChannelId", channelId); }} fullWidth />
                                 </Form.Item>
                                 <Form.Item label="文本模型" className="mb-4">
-                                    <ModelPicker config={modelConfig} value={modelConfig.textModel} channelId={modelConfig.textChannelId} onChange={(model, channelId) => { updateConfig("textModel", model); if (channelId) updateConfig("textChannelId", channelId); }} fullWidth />
+                                    <ModelPicker config={sub2APIModelConfig("text")} value={modelConfig.textModel} channelId={modelConfig.textChannelId} onChange={(model, channelId) => { updateConfig("textModel", model); if (channelId) updateConfig("textChannelId", channelId); }} fullWidth />
                                 </Form.Item>
                                 <Form.Item label="视频模型（预留）" className="mb-4">
-                                    <ModelPicker config={modelConfig} value={modelConfig.videoModel} channelId={modelConfig.videoChannelId} onChange={(model, channelId) => { updateConfig("videoModel", model); if (channelId) updateConfig("videoChannelId", channelId); }} fullWidth />
+                                    <ModelPicker config={sub2APIModelConfig("video")} value={modelConfig.videoModel} channelId={modelConfig.videoChannelId} onChange={(model, channelId) => { updateConfig("videoModel", model); if (channelId) updateConfig("videoChannelId", channelId); }} fullWidth />
                                 </Form.Item>
                             </div>
                         </>
