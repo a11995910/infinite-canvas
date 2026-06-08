@@ -3,7 +3,7 @@ FROM node:22-bookworm-slim AS web-build
 
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --registry=https://registry.npmmirror.com --cache=/root/.npm
+RUN --mount=type=cache,target=/root/.npm npm ci --legacy-peer-deps --registry=https://registry.npmmirror.com --cache=/root/.npm
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
