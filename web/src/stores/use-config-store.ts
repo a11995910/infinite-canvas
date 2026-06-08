@@ -57,6 +57,7 @@ export type AiConfig = {
     count: string;
     seed?: string;
 };
+export type AiModelRole = "image" | "video" | "text";
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const SUB2API_EMBED_CHANNEL_ID = "sub2api-embedded";
@@ -266,8 +267,64 @@ export function channelIdForActiveModel(config: AiConfig) {
     return config.imageChannelId;
 }
 
+export function modelForRole(config: AiConfig, role: AiModelRole) {
+    if (role === "video") return config.videoModel || config.model || defaultConfig.videoModel;
+    if (role === "text") return config.textModel || config.model || defaultConfig.textModel;
+    return config.imageModel || config.model || defaultConfig.imageModel;
+}
+
+export function channelIdForRole(config: AiConfig, role: AiModelRole) {
+    if (role === "video") return config.videoChannelId;
+    if (role === "text") return config.textChannelId;
+    return config.imageChannelId;
+}
+
+export function configForRole(config: AiConfig, role: AiModelRole): AiConfig {
+    const { model, channelId: activeChannelId } = resolveModelSelectionForRole(config, role);
+    return {
+        ...config,
+        model,
+        activeChannelId,
+        imageModel: role === "image" ? model : config.imageModel,
+        videoModel: role === "video" ? model : config.videoModel,
+        textModel: role === "text" ? model : config.textModel,
+    };
+}
+
+export function resolveModelSelectionForRole(config: AiConfig, role: AiModelRole, savedModel?: string, savedChannelId?: string) {
+    const configuredModel = modelForRole(config, role);
+    const fallbackChannelId = channelIdForRole(config, role);
+    const fallbackModel = firstModelInChannel(config, fallbackChannelId) || configuredModel;
+    const channelId = savedChannelId || fallbackChannelId;
+    const model = savedModel || configuredModel;
+    if (!model) return { model: fallbackModel, channelId: fallbackChannelId };
+    if (isModelAllowedInChannel(config, model, channelId)) return { model, channelId };
+    if (fallbackModel && isModelAllowedInChannel(config, fallbackModel, fallbackChannelId)) return { model: fallbackModel, channelId: fallbackChannelId };
+    return { model: fallbackModel, channelId: fallbackChannelId };
+}
+
+function firstModelInChannel(config: AiConfig, channelId: string) {
+    if (!channelId) return "";
+    const channels =
+        config.channelMode === "remote"
+            ? config.publicChannels.map((channel) => ({ id: channel.id, models: channel.models }))
+            : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
+    return channels.find((channel) => channel.id === channelId)?.models[0] || "";
+}
+
+function isModelAllowedInChannel(config: AiConfig, model: string, channelId: string) {
+    const channels =
+        config.channelMode === "remote"
+            ? config.publicChannels.map((channel) => ({ id: channel.id, models: channel.models }))
+            : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
+    if (!channelId) return !config.models.length || config.models.includes(model);
+    const channel = channels.find((item) => item.id === channelId);
+    if (!channel) return false;
+    return !channel.models.length || channel.models.includes(model);
+}
+
 export function localChannelForActiveModel(config: AiConfig) {
     const channels = normalizeLocalChannels(config);
     const preferredId = channelIdForActiveModel(config);
-    return channels.find((channel) => channel.id === preferredId && channel.models.includes(config.model)) || channels.find((channel) => channel.models.includes(config.model)) || channels.find((channel) => channel.id === preferredId) || channels[0];
+    return channels.find((channel) => channel.id === preferredId) || channels.find((channel) => channel.models.includes(config.model)) || channels[0];
 }

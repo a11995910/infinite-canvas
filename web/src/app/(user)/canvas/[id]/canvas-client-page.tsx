@@ -8,7 +8,7 @@ import { saveAs } from "file-saver";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestVideoGeneration } from "@/services/api/video";
-import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { configForRole, defaultConfig, resolveModelSelectionForRole, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
 import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
@@ -3383,13 +3383,13 @@ function getInputSummary(inputs: NodeGenerationInput[]) {
 }
 
 function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
-    const defaultModel = mode === "image" ? config.imageModel : mode === "video" ? config.videoModel : config.textModel;
-    const activeChannelId = mode === "image" ? node?.metadata?.imageChannelId || config.imageChannelId : mode === "video" ? node?.metadata?.videoChannelId || config.videoChannelId : node?.metadata?.textChannelId || config.textChannelId;
+    const roleConfig = configForRole(config, mode);
+    const selected = resolveModelSelectionForRole(config, mode, node?.metadata?.model, node?.metadata?.[mode === "image" ? "imageChannelId" : mode === "video" ? "videoChannelId" : "textChannelId"]);
     return {
-        ...config,
-        model: node?.metadata?.model || defaultModel || config.model || defaultConfig.model,
+        ...roleConfig,
+        model: selected.model || config.model || defaultConfig.model,
         apiMode: "images",
-        activeChannelId,
+        activeChannelId: selected.channelId,
         imageChannelId: node?.metadata?.imageChannelId || config.imageChannelId,
         videoChannelId: node?.metadata?.videoChannelId || config.videoChannelId,
         textChannelId: node?.metadata?.textChannelId || config.textChannelId,

@@ -7,7 +7,7 @@ import { motion } from "motion/react";
 
 import { ImageGenerationPending } from "@/components/image-generation-pending";
 import { ModelPicker } from "@/components/model-picker";
-import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { configForRole, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { nanoid } from "nanoid";
@@ -142,11 +142,7 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
     };
 
     const sendMessage = async (text: string, nextMode: AssistantMode, history: CanvasAssistantMessage[], savedReferences?: CanvasAssistantReference[]) => {
-        const requestConfig = {
-            ...effectiveConfig,
-            model: nextMode === "image" ? effectiveConfig.imageModel || effectiveConfig.model : effectiveConfig.textModel || effectiveConfig.model,
-            activeChannelId: nextMode === "image" ? effectiveConfig.imageChannelId : effectiveConfig.textChannelId,
-        };
+        const requestConfig = configForRole(effectiveConfig, nextMode === "image" ? "image" : "text");
         if (!isAiConfigReady(requestConfig, requestConfig.model)) {
             openConfigDialog(true);
             return;
@@ -424,8 +420,8 @@ function AssistantComposer({
     modelCosts?: { model: string; credits: number }[];
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const activeModel = mode === "image" ? config.imageModel || config.model : config.textModel || config.model;
-    const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: activeModel, count: mode === "image" ? config.count : 1 });
+    const roleConfig = configForRole(config, mode === "image" ? "image" : "text");
+    const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: roleConfig.model, count: mode === "image" ? config.count : 1 });
 
     return (
         <div className="px-2 pb-2" onWheelCapture={(event) => event.stopPropagation()}>
@@ -466,11 +462,11 @@ function AssistantComposer({
                         <AssistantModeSwitch mode={mode} theme={theme} onChange={onModeChange} />
                         {mode === "image" ? (
                             <>
-                                <ModelPicker className="h-8 shrink-0" config={config} value={config.imageModel || config.model} channelId={config.imageChannelId} onChange={(model, channelId) => { onConfigChange("imageModel", model); if (channelId) onConfigChange("imageChannelId", channelId); }} onMissingConfig={onMissingConfig} />
+                                <ModelPicker className="h-8 shrink-0" config={config} value={roleConfig.model} channelId={roleConfig.activeChannelId} onChange={(model, channelId) => { onConfigChange("imageModel", model); if (channelId) onConfigChange("imageChannelId", channelId); }} onMissingConfig={onMissingConfig} />
                                 <CanvasImageSettingsPopover config={config} placement="topRight" getPopupContainer={() => document.body} buttonClassName="canvas-composer-settings canvas-composer-icon !h-8 !min-w-8 !rounded-full !px-2" onConfigChange={onConfigChange} onMissingConfig={onMissingConfig} />
                             </>
                         ) : (
-                            <ModelPicker className="h-8 shrink-0" config={config} value={config.textModel || config.model} channelId={config.textChannelId} onChange={(model, channelId) => { onConfigChange("textModel", model); if (channelId) onConfigChange("textChannelId", channelId); }} onMissingConfig={onMissingConfig} />
+                            <ModelPicker className="h-8 shrink-0" config={config} value={roleConfig.model} channelId={roleConfig.activeChannelId} onChange={(model, channelId) => { onConfigChange("textModel", model); if (channelId) onConfigChange("textChannelId", channelId); }} onMissingConfig={onMissingConfig} />
                         )}
                     </div>
                     <Button

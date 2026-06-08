@@ -6,7 +6,7 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Edit3, Eye, Image as ImageIc
 import { App, Button, Empty, Input, Modal, Segmented } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { configForRole, defaultConfig, resolveModelSelectionForRole, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -348,11 +348,16 @@ function InputChip({ label, value, style }: { label: string; value: string; styl
 }
 
 function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: CanvasGenerationMode): AiConfig {
-    const defaultModel = mode === "image" ? globalConfig.imageModel : mode === "video" ? globalConfig.videoModel : globalConfig.textModel;
+    const roleConfig = configForRole(globalConfig, mode);
+    const selected = resolveModelSelectionForRole(globalConfig, mode, node.metadata?.model, node.metadata?.[mode === "image" ? "imageChannelId" : mode === "video" ? "videoChannelId" : "textChannelId"]);
     return {
-        ...globalConfig,
-        model: node.metadata?.model || defaultModel || globalConfig.model || defaultConfig.model,
+        ...roleConfig,
+        model: selected.model || globalConfig.model || defaultConfig.model,
+        activeChannelId: selected.channelId,
         apiMode: "images",
+        imageChannelId: node.metadata?.imageChannelId || globalConfig.imageChannelId,
+        videoChannelId: node.metadata?.videoChannelId || globalConfig.videoChannelId,
+        textChannelId: node.metadata?.textChannelId || globalConfig.textChannelId,
         quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
         size: node.metadata?.size || globalConfig.size || defaultConfig.size,
         outputFormat: node.metadata?.outputFormat || globalConfig.outputFormat || defaultConfig.outputFormat,

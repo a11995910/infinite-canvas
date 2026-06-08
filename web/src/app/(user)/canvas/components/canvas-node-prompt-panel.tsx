@@ -5,7 +5,7 @@ import { ArrowUp, Library, LoaderCircle } from "lucide-react";
 import { Button, Tooltip } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { configForRole, defaultConfig, resolveModelSelectionForRole, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -135,10 +135,12 @@ function defaultMode(type: CanvasNodeData["type"]): CanvasNodeGenerationMode {
 }
 
 function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: CanvasNodeGenerationMode): AiConfig {
-    const defaultModel = mode === "image" ? globalConfig.imageModel : mode === "video" ? globalConfig.videoModel : globalConfig.textModel;
+    const roleConfig = configForRole(globalConfig, mode);
+    const selected = resolveModelSelectionForRole(globalConfig, mode, node.metadata?.model, node.metadata?.[mode === "image" ? "imageChannelId" : mode === "video" ? "videoChannelId" : "textChannelId"]);
     return {
-        ...globalConfig,
-        model: node.metadata?.model || defaultModel || globalConfig.model || defaultConfig.model,
+        ...roleConfig,
+        model: selected.model || globalConfig.model || defaultConfig.model,
+        activeChannelId: selected.channelId,
         apiMode: "images",
         imageChannelId: node.metadata?.imageChannelId || globalConfig.imageChannelId,
         videoChannelId: node.metadata?.videoChannelId || globalConfig.videoChannelId,

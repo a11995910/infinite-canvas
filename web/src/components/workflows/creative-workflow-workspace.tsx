@@ -15,7 +15,7 @@ import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { deleteUserWorkflow, draftUserWorkflow, fetchUserConfig, fetchUserWorkflows, saveUserWorkflow, type CreativeWorkflowRecord } from "@/services/api/user-config";
 import { deleteStoredImages, imageToDataUrl, uploadImage } from "@/services/image-storage";
-import { defaultConfig, localChannelForActiveModel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { configForRole, defaultConfig, localChannelForActiveModel, resolveModelSelectionForRole, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -263,8 +263,9 @@ export function CreativeWorkflowWorkspace({
     const renderedPrompt = useMemo(() => (runningWorkflow ? renderWorkflowPrompt(runningWorkflow, inputValues) : ""), [inputValues, runningWorkflow]);
     const runningTaskCount = workflowTasks.filter((task) => task.status === "running").length;
     const activeSeriesDrafts = seriesDrafts.filter((item) => item.status !== "success");
-    const agentModel = agentTextModel || effectiveConfig.textModel || effectiveConfig.model;
-    const agentChannelId = agentTextChannelId || effectiveConfig.textChannelId;
+    const textRoleConfig = configForRole(effectiveConfig, "text");
+    const agentModel = agentTextModel || textRoleConfig.model;
+    const agentChannelId = agentTextChannelId || textRoleConfig.activeChannelId;
     const agentModelInfo = useMemo(() => describeModelSelection(effectiveConfig, agentModel, agentChannelId), [agentChannelId, agentModel, effectiveConfig]);
 
     useEffect(() => {
@@ -273,9 +274,9 @@ export function CreativeWorkflowWorkspace({
     }, [isUserReady, token]);
 
     useEffect(() => {
-        if (!agentTextModel && (effectiveConfig.textModel || effectiveConfig.model)) setAgentTextModel(effectiveConfig.textModel || effectiveConfig.model);
-        if (!agentTextChannelId && effectiveConfig.textChannelId) setAgentTextChannelId(effectiveConfig.textChannelId);
-    }, [agentTextChannelId, agentTextModel, effectiveConfig.model, effectiveConfig.textChannelId, effectiveConfig.textModel]);
+        if (!agentTextModel && textRoleConfig.model) setAgentTextModel(textRoleConfig.model);
+        if (!agentTextChannelId && textRoleConfig.activeChannelId) setAgentTextChannelId(textRoleConfig.activeChannelId);
+    }, [agentTextChannelId, agentTextModel, textRoleConfig.activeChannelId, textRoleConfig.model]);
 
     useEffect(() => {
         if (!runningTaskCount) return;
@@ -537,9 +538,9 @@ export function CreativeWorkflowWorkspace({
         }
         setAgentLoading(true);
         try {
-            const textModel = agentTextModel || effectiveConfig.textModel || effectiveConfig.model;
-            const textChannelId = agentTextChannelId || effectiveConfig.textChannelId;
-            const textConfig = { ...effectiveConfig, model: textModel, textModel, textChannelId, activeChannelId: textChannelId };
+            const textModel = agentTextModel || textRoleConfig.model;
+            const textChannelId = agentTextChannelId || textRoleConfig.activeChannelId;
+            const textConfig = { ...textRoleConfig, model: textModel, textModel, textChannelId, activeChannelId: textChannelId };
             if (!isAiConfigReady(textConfig, textModel)) {
                 openConfigDialog(true);
                 return;
@@ -587,9 +588,10 @@ export function CreativeWorkflowWorkspace({
 
     const generateSeriesPromptDrafts = async () => {
         if (!runningWorkflow) return;
-        const promptModel = runningWorkflow.seriesConfig.promptModel || effectiveConfig.textModel || effectiveConfig.model;
-        const promptChannelId = runningWorkflow.seriesConfig.promptChannelId || effectiveConfig.textChannelId;
-        const textConfig = { ...effectiveConfig, model: promptModel, textModel: promptModel, textChannelId: promptChannelId, activeChannelId: promptChannelId, systemPrompt: effectiveConfig.systemPrompts.workflow || effectiveConfig.systemPrompt };
+        const promptRuntime = resolveWorkflowPromptRuntime(runningWorkflow, effectiveConfig);
+        const promptModel = promptRuntime.model;
+        const promptChannelId = promptRuntime.channelId;
+        const textConfig = { ...configForRole(effectiveConfig, "text"), model: promptModel, textModel: promptModel, textChannelId: promptChannelId, activeChannelId: promptChannelId, systemPrompt: effectiveConfig.systemPrompts.workflow || effectiveConfig.systemPrompt };
         if (!isAiConfigReady(textConfig, promptModel)) {
             message.warning("请先完成文本模型配置");
             openConfigDialog(true);
@@ -1164,8 +1166,14 @@ export function CreativeWorkflowWorkspace({
                                 <Typography.Paragraph className="!mb-0 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-stone-100 p-3 text-sm dark:bg-stone-950">{renderedPrompt || "填写变量后会在这里预览最终提示词"}</Typography.Paragraph>
                             </div>
                             <div className="grid grid-cols-2 gap-2 text-xs text-stone-500 dark:text-stone-400">
-                                <InfoPill label="模型" value={resolveWorkflowRuntime(runningWorkflow, effectiveConfig).model} />
-                                <InfoPill label="接口" value="Images" />
+                                {runningWorkflow.mode === "multi_image_series" ? (
+                                    <>
+                                        <InfoPill label="提示词模型" value={resolveWorkflowPromptRuntime(runningWorkflow, effectiveConfig).model} />
+                                        <InfoPill label="文本接口" value="Chat Completions" />
+                                    </>
+                                ) : null}
+                                <InfoPill label="出图模型" value={resolveWorkflowRuntime(runningWorkflow, effectiveConfig).model} />
+                                <InfoPill label="出图接口" value="Images" />
                                 <InfoPill label="尺寸" value={runningWorkflow.config.size || effectiveConfig.size} />
                                 <InfoPill label={runningWorkflow.mode === "multi_image_series" ? "草稿数量" : "数量"} value={`${runningWorkflow.mode === "multi_image_series" ? runningWorkflow.seriesConfig.targetCount || "4" : runningWorkflow.config.count || "1"} 张`} />
                             </div>
@@ -1414,6 +1422,8 @@ function WorkflowEditorModal({
     const patchSeriesConfig = (next: Partial<WorkflowSeriesConfig>) => patch({ seriesConfig: { ...workflow.seriesConfig, ...next } });
     const patchVariable = (id: string, next: Partial<WorkflowVariable>) => patch({ variables: workflow.variables.map((item) => (item.id === id ? normalizeVariable({ ...item, ...next }) : item)) });
     const removeVariable = (id: string) => patch({ variables: workflow.variables.filter((item) => item.id !== id) });
+    const imageRuntime = resolveWorkflowRuntime(workflow, modelConfig);
+    const promptRuntime = resolveWorkflowPromptRuntime(workflow, modelConfig);
 
     return (
         <Modal title={workflow.createdAt ? "编辑工作流" : "新建工作流"} open={open} width={1080} onCancel={onCancel} onOk={() => onSave(workflow)} okText="保存" cancelText="取消" destroyOnHidden>
@@ -1478,7 +1488,7 @@ function WorkflowEditorModal({
                 </div>
                 <aside className="space-y-3 rounded-lg border border-stone-200 p-3 dark:border-stone-800">
                     <div className="text-sm font-medium">生成配置</div>
-                    <ModelPicker config={modelConfig} fullWidth value={workflow.config.imageModel || workflow.config.model} channelId={workflow.config.imageChannelId || modelConfig.imageChannelId} onChange={(value, channelId) => patchConfig({ imageModel: value, model: value, ...(channelId ? { imageChannelId: channelId } : {}) })} />
+                    <ModelPicker config={modelConfig} fullWidth value={imageRuntime.model} channelId={imageRuntime.channelId} onChange={(value, channelId) => patchConfig({ imageModel: value, model: value, ...(channelId ? { imageChannelId: channelId } : {}) })} />
                     {workflow.mode === "multi_image_series" ? (
                         <div className="space-y-3 rounded-md bg-stone-100 p-3 text-sm dark:bg-stone-950">
                             <div className="flex items-center gap-2 font-medium">
@@ -1488,8 +1498,8 @@ function WorkflowEditorModal({
                             <ModelPicker
                                 config={modelConfig}
                                 fullWidth
-                                value={workflow.seriesConfig.promptModel || modelConfig.textModel || modelConfig.model}
-                                channelId={workflow.seriesConfig.promptChannelId || modelConfig.textChannelId}
+                                value={promptRuntime.model}
+                                channelId={promptRuntime.channelId}
                                 placeholder="选择提示词文本模型"
                                 onChange={(model, channelId) => patchSeriesConfig({ promptModel: model, promptChannelId: channelId || "" })}
                             />
@@ -1702,10 +1712,11 @@ function createWorkflowConfig(config: AiConfig): WorkflowGenerationConfig {
 }
 
 function createWorkflowSeriesConfig(config: AiConfig): WorkflowSeriesConfig {
+    const promptRuntime = resolveModelSelectionForRole(config, "text");
     return {
         targetCount: "4",
-        promptModel: config.textModel || config.model || defaultConfig.textModel,
-        promptChannelId: config.textChannelId || "",
+        promptModel: promptRuntime.model || defaultConfig.textModel,
+        promptChannelId: promptRuntime.channelId || "",
         promptInstruction: "围绕同一主题拆分成封面图、核心信息图、场景图和总结图；每张图需要画面重点不同但视觉风格一致。",
         reviewRequired: true,
         concurrency: "3",
@@ -1905,13 +1916,12 @@ function recordToWorkflow(record: CreativeWorkflowRecord<CreativeWorkflow>): Cre
 }
 
 function resolveWorkflowRuntime(workflow: CreativeWorkflow, baseConfig: AiConfig) {
-    const workflowModel = workflow.config.imageModel || workflow.config.model;
-    const fallbackModel = baseConfig.imageModel || baseConfig.model;
-    if (!workflowModel) return { model: fallbackModel, apiMode: "images" as const, channelId: baseConfig.imageChannelId };
-    if (baseConfig.channelMode === "remote" && workflowModel !== fallbackModel && (!baseConfig.models.length || !baseConfig.models.includes(workflowModel))) {
-        return { model: fallbackModel, apiMode: "images" as const, channelId: baseConfig.imageChannelId };
-    }
-    return { model: workflowModel, apiMode: "images" as const, channelId: workflow.config.imageChannelId || baseConfig.imageChannelId };
+    const runtime = resolveModelSelectionForRole(baseConfig, "image", workflow.config.imageModel || workflow.config.model, workflow.config.imageChannelId);
+    return { model: runtime.model, apiMode: "images" as const, channelId: runtime.channelId };
+}
+
+function resolveWorkflowPromptRuntime(workflow: CreativeWorkflow, baseConfig: AiConfig) {
+    return resolveModelSelectionForRole(baseConfig, "text", workflow.seriesConfig.promptModel, workflow.seriesConfig.promptChannelId);
 }
 
 function buildRunConfig(baseConfig: AiConfig, workflowConfig: WorkflowGenerationConfig, runtime: { model: string; apiMode: AiConfig["apiMode"]; channelId: string }): AiConfig {
