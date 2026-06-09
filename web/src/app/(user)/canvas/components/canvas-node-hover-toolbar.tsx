@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Modal, Segmented, Tooltip } from "antd";
-import { Camera, Download, FolderPlus, Image as ImageIcon, Info, Lock, LockOpen, Maximize2, MessageSquare, Minus, PackageOpen, Pencil, Plus, RefreshCw, Scissors, Settings2, Trash2, Upload, Video } from "lucide-react";
+import { Camera, Download, FolderPlus, Image as ImageIcon, Info, Lock, LockOpen, Maximize2, MessageSquare, Minus, PackageOpen, Pencil, Plus, RefreshCw, Scissors, Settings2, Sparkles, Trash2, Upload, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
 import { useThemeStore } from "@/stores/use-theme-store";
+import type { ReferenceImageRole } from "@/types/image";
 import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "../types";
 
 type CanvasNodeHoverToolbarProps = {
@@ -23,6 +24,7 @@ type CanvasNodeHoverToolbarProps = {
     onUpload: (node: CanvasNodeData) => void;
     onDownload: (node: CanvasNodeData) => void;
     onSaveAsset: (node: CanvasNodeData) => void;
+    onIterate: (node: CanvasNodeData) => void;
     onCrop: (node: CanvasNodeData) => void;
     onStrictSplit: (node: CanvasNodeData) => void;
     onAngle: (node: CanvasNodeData) => void;
@@ -46,6 +48,7 @@ export function CanvasNodeHoverToolbar({
     onUpload,
     onDownload,
     onSaveAsset,
+    onIterate,
     onCrop,
     onStrictSplit,
     onAngle,
@@ -100,6 +103,7 @@ export function CanvasNodeHoverToolbar({
                     active={node.metadata?.freeResize}
                 />
             ) : null}
+            {hasImage ? <ToolbarAction title="基于当前图片继续迭代" label="迭代" icon={<Sparkles className="size-4" />} onClick={() => onIterate(node)} /> : null}
             {hasImage ? <ToolbarAction title="裁剪并生成新节点" label="裁剪" icon={<Scissors className="size-4" />} onClick={() => onCrop(node)} /> : null}
             {hasImage ? <ToolbarAction title="一键严格拆分图中主体物件" label="拆物件" icon={<PackageOpen className="size-4" />} onClick={() => onStrictSplit(node)} /> : null}
             {hasImage ? <ToolbarAction title="生成角度" label="多角度" icon={<Camera className="size-4" />} onClick={() => onAngle(node)} /> : null}
@@ -159,6 +163,7 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
                             <InfoRow label="位置" value={`${Math.round(node.position.x)}, ${Math.round(node.position.y)}`} />
                             <InfoRow label="状态" value={node.metadata?.status || "idle"} />
                             {batchCount > 1 ? <InfoRow label="图片组" value={`${batchCount} 张`} /> : null}
+                            {node.type === CanvasNodeType.Image && node.metadata?.referenceRole ? <InfoRow label="参考角色" value={referenceRoleLabel(node.metadata.referenceRole)} /> : null}
                             {node.metadata?.prompt ? <InfoRow label="提示词" value={node.metadata.prompt} /> : null}
                             {imageBytes ? <InfoRow label="图片大小" value={formatBytes(imageBytes)} /> : null}
                             {node.metadata?.errorDetails ? (
@@ -213,4 +218,17 @@ function InfoRow({ label, value }: { label: string; value: ReactNode }) {
             <span className="min-w-0 whitespace-pre-wrap break-words">{value}</span>
         </div>
     );
+}
+
+function referenceRoleLabel(role: ReferenceImageRole) {
+    const labels = {
+        general: "通用",
+        subject: "主体",
+        style: "风格",
+        composition: "构图",
+        color: "色彩",
+        background: "背景",
+        locked: "锁定",
+    };
+    return role ? labels[role] : "";
 }

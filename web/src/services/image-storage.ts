@@ -61,7 +61,7 @@ export async function uploadImage(input: string | Blob): Promise<UploadedImage> 
         }
         blob = await response.blob();
     } else {
-        blob = url;
+        blob = await url.slice(0, url.size, url.type || "application/octet-stream").arrayBuffer().then((buffer) => new Blob([buffer], { type: url.type }));
     }
     const serverUpload = await maybeUploadImageToServer(blob);
     if (serverUpload) return serverUpload;
@@ -155,6 +155,10 @@ export async function setImageBlob(storageKey: string, blob: Blob) {
 
 export async function imageToDataUrl(image: { url?: string; dataUrl?: string; storageKey?: string }) {
     const serverObjectId = image.storageKey?.startsWith("server:") ? image.storageKey.slice("server:".length) : "";
+    if (image.storageKey?.startsWith("image:")) {
+        const blob = await store.getItem<Blob>(image.storageKey).catch(() => null);
+        if (blob) return blobToDataUrl(blob);
+    }
     const urls = [
         image.dataUrl && !image.dataUrl.startsWith("blob:") ? image.dataUrl : "",
         image.url && !image.url.startsWith("blob:") ? image.url : "",

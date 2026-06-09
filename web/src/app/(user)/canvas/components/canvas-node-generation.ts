@@ -1,5 +1,5 @@
 import type { ChatCompletionMessage } from "@/services/api/image";
-import type { ReferenceImage } from "@/types/image";
+import type { ReferenceImage, ReferenceImageRole } from "@/types/image";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "../types";
 
 export type NodeGenerationContext = {
@@ -24,9 +24,11 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
         .filter(Boolean)
         .join("\n\n");
     const referenceImages = inputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
+    const rolePrompts = inputs.map((input) => (input.image?.role ? referenceRolePrompt(input.image.role, input.title) : "")).filter(Boolean);
+    const promptWithRoles = rolePrompts.length ? `${prompt}\n\n参考图角色：\n${rolePrompts.join("\n")}` : prompt;
 
     return {
-        prompt: upstreamText ? `${prompt}\n\n${upstreamText}` : prompt,
+        prompt: upstreamText ? `${promptWithRoles}\n\n${upstreamText}` : promptWithRoles,
         referenceImages,
         textCount: inputs.filter((input) => input.type === "text").length,
         imageCount: referenceImages.length,
@@ -74,7 +76,22 @@ function readReferenceImage(node: CanvasNodeData): ReferenceImage | null {
         type: node.metadata.mimeType || "image/png",
         dataUrl: node.metadata.content,
         storageKey: node.metadata.storageKey,
+        role: node.metadata.referenceRole,
     };
+}
+
+function referenceRolePrompt(role: ReferenceImageRole, title: string) {
+    const label = title || "参考图";
+    const prompts: Record<ReferenceImageRole, string> = {
+        general: `${label}：通用参考。`,
+        subject: `${label}：主体参考，保留主体身份、形状、比例和关键细节。`,
+        style: `${label}：风格参考，主要学习画风、质感、材质和光影。`,
+        composition: `${label}：构图参考，主要学习镜头、布局、透视和留白。`,
+        color: `${label}：色彩参考，主要学习色调、光照和配色。`,
+        background: `${label}：背景参考，主要学习环境、场景和空间氛围。`,
+        locked: `${label}：锁定参考，人物、产品或主体必须尽量保持不变。`,
+    };
+    return prompts[role];
 }
 
 function getOrderedUpstreamNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {

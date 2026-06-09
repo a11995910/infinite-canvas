@@ -26,6 +26,10 @@ type ParsedImageResponse = {
     responseBody: string;
 };
 
+type ImageEditOptions = {
+    maskDataUrl?: string;
+};
+
 export class ImageRequestError extends Error {
     detail?: string;
 
@@ -529,7 +533,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
     );
 }
 
-async function requestImageEditSingle(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams): Promise<GeneratedImage[]> {
+async function requestImageEditSingle(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams, options: ImageEditOptions = {}): Promise<GeneratedImage[]> {
     const mime = MIME_MAP[params.outputFormat];
     const formData = new FormData();
     formData.set("model", config.model);
@@ -547,6 +551,9 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
     }
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));
+    if (options.maskDataUrl) {
+        formData.set("mask", await dataUrlToFile({ id: "mask", name: "mask.png", type: "image/png", dataUrl: options.maskDataUrl }));
+    }
 
     return requestAndParseImages(
         config,
@@ -598,12 +605,12 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
     }
 }
 
-async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]): Promise<GeneratedImage[]> {
+async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], options: ImageEditOptions = {}): Promise<GeneratedImage[]> {
     const imageConfig = { ...config, apiMode: "images" as const };
     const params = createImageRequestParams(config);
     const useConcurrentSingleRequests = config.codexCli || config.streamImages;
     if (params.n > 1 && useConcurrentSingleRequests) {
-        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...imageConfig, count: "1" }, prompt, references)));
+        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...imageConfig, count: "1" }, prompt, references, options)));
         const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
         if (images.length) return images;
         const firstError = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -612,7 +619,7 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     if (references.length && isAgnesImageModel(imageConfig.model)) {
         return requestAgnesImageEdit(imageConfig, prompt, references, params);
     }
-    return references.length ? requestImageEditSingle(imageConfig, prompt, references, params) : requestImageGenerationSingle(imageConfig, prompt, params);
+    return references.length ? requestImageEditSingle(imageConfig, prompt, references, params, options) : requestImageGenerationSingle(imageConfig, prompt, params);
 }
 
 export async function requestGeneration(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string) {
@@ -626,9 +633,9 @@ export async function requestGeneration(config: AiConfig & { seedIndex?: number;
     }
 }
 
-export async function requestEdit(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]) {
+export async function requestEdit(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], options: ImageEditOptions = {}) {
     try {
-        const images = await requestImages(config, prompt, references);
+        const images = await requestImages(config, prompt, references, options);
         refreshRemoteUser(config);
         return images;
     } catch (error) {

@@ -25,6 +25,20 @@ export async function cropDataUrl(dataUrl: string, crop?: ImageCropRect) {
     return drawCrop(image, sx, sy, size, size);
 }
 
+export async function createMaskDataUrl(dataUrl: string, crop: ImageCropRect) {
+    const image = await loadImage(dataUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, image.width);
+    canvas.height = Math.max(1, image.height);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("无法创建图片遮罩");
+
+    context.fillStyle = "rgba(255,255,255,1)";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.clearRect(Math.floor(crop.x * canvas.width), Math.floor(crop.y * canvas.height), Math.ceil(crop.width * canvas.width), Math.ceil(crop.height * canvas.height));
+    return canvas.toDataURL("image/png");
+}
+
 export async function transformAngleDataUrl(dataUrl: string, params: ImageAngleTransform) {
     const image = await loadImage(dataUrl);
     const canvas = document.createElement("canvas");
@@ -77,6 +91,10 @@ function drawCrop(image: HTMLImageElement, sx: number, sy: number, sw: number, s
 
 function loadImage(dataUrl: string) {
     return new Promise<HTMLImageElement>((resolve, reject) => {
+        if (!dataUrl) {
+            reject(new Error("图片内容为空，无法处理"));
+            return;
+        }
         const image = new Image();
         let src = dataUrl;
         if (dataUrl.startsWith("http")) {
@@ -84,7 +102,7 @@ function loadImage(dataUrl: string) {
             image.crossOrigin = "anonymous";
         }
         image.onload = () => resolve(image);
-        image.onerror = (err) => reject(err);
+        image.onerror = () => reject(new Error("图片无法加载或已损坏，无法处理裁剪/遮罩"));
         image.src = src;
     });
 }

@@ -1,3 +1,5 @@
+import type { ReferenceImageRole } from "@/types/image";
+
 export type Position = {
     x: number;
     y: number;
@@ -43,6 +45,7 @@ export type CanvasNodeMetadata = {
     seconds?: string;
     vquality?: string;
     references?: string[];
+    referenceRole?: ReferenceImageRole;
     naturalWidth?: number;
     naturalHeight?: number;
     freeResize?: boolean;
