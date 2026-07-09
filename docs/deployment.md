@@ -267,6 +267,23 @@ SUB2API_EMBED_PROXY_TTL_SECONDS=86400
 - `SUB2API_EMBED_PROXY_TTL_SECONDS` 控制代理签名有效期，默认 24 小时。
 - 本地开发需要接入 `localhost` 或内网 Sub2API 时，可临时设置 `SUB2API_EMBED_ALLOW_PRIVATE_HOSTS=true`，生产环境不要打开。
 
+生产环境同时保留 `.shop`、`.xyz` 和服务器 IP 入口时，`SUB2API_EMBED_ALLOWED_ORIGINS` 必须逐项填写真实 Sub2API 来源的 origin。该配置是精确匹配，不会自动兼容同域名的其他协议、端口或不同后缀。
+
+```env
+SUB2API_EMBED_ALLOWED_ORIGINS=https://fast.youkeduo.site,http://192.220.24.46:8080,https://fast.youkeduo.xyz,https://fast.youkeduo.shop,http://207.57.145.15:8080,http://207.57.145.15
+SUB2API_EMBED_ALLOW_PRIVATE_HOSTS=false
+```
+
+当前线上存在两个画布入口：`canvas.youkeduo.shop` 指向新 VPS，`canvas.youkeduo.xyz` 仍可能指向老 VPS。只要两个入口还同时可用，两台服务器的 `.env` 都要保持相同的 `SUB2API_EMBED_ALLOWED_ORIGINS`，否则用户从不同域名进入时会出现“当前 Sub2API 来源不在允许列表中”。
+
+更新服务器 `.env` 后需要重建应用容器让环境变量进入运行时：
+
+```bash
+docker compose up -d app
+```
+
+来源白名单验证可以不传登录令牌直接请求会话接口。允许来源应返回 `缺少 Sub2API 登录令牌`，如果返回 `当前 Sub2API 来源不在允许列表中`，说明该来源仍未加入运行中容器的白名单。
+
 ### 1Panel 反向代理配置
 
 如果应用和 OpenResty/1Panel 在同一台服务器，代理地址不要填写公网 IP，直接走本机回环地址：
