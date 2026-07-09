@@ -1702,7 +1702,19 @@ function ResultImageCard({
     );
 }
 
+function pendingImageHint(result: GenerationResult, elapsedMs: number) {
+    const timeoutSeconds = Math.max(1, Number(result.config.timeout) || 600);
+    const timeoutMs = timeoutSeconds * 1000;
+    if (elapsedMs >= timeoutMs * 0.9) return "即将达到超时上限，若上游仍无最终图片会自动结束。";
+    if (elapsedMs >= Math.min(timeoutMs * 0.5, 180000)) return "上游响应较慢，模型请求仍在等待最终图片。";
+    if (elapsedMs >= 60000) return "模型已调用，上游仍在生成或排队。";
+    return "";
+}
+
 function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationResult; now: number; onCopyPrompt: (text: string) => void | Promise<void> }) {
+    const elapsedMs = Math.max(0, now - result.createdAt);
+    const hint = pendingImageHint(result, elapsedMs);
+
     return (
         <div className="overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
             <div className="relative aspect-[4/3]">
@@ -1716,10 +1728,16 @@ function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationRes
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                     <LoaderCircle className="size-6 animate-spin" />
                     <span>生成中</span>
-                    <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(Math.max(0, now - result.createdAt))}</span>
+                    <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(elapsedMs)}</span>
+                    {hint ? (
+                        <span className="mx-4 flex items-center gap-1 rounded-md bg-white/85 px-2.5 py-1.5 text-center text-xs leading-5 text-stone-600 shadow-sm dark:bg-stone-950/75 dark:text-stone-300">
+                            <AlertCircle className="size-3.5 shrink-0" />
+                            {hint}
+                        </span>
+                    ) : null}
                 </div>
             </div>
-            <TaskInfo result={{ ...result, durationMs: Math.max(0, now - result.createdAt) }} onCopyPrompt={onCopyPrompt} />
+            <TaskInfo result={{ ...result, durationMs: elapsedMs }} onCopyPrompt={onCopyPrompt} />
         </div>
     );
 }

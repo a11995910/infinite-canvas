@@ -12,13 +12,17 @@ export type LocalModelChannel = {
     name: string;
     baseUrl: string;
     apiKey: string;
+    apiFormat: ApiCallFormat;
     models: string[];
 };
+
+export type ApiCallFormat = "openai" | "gemini";
 
 export type AiConfig = {
     channelMode: "remote" | "local";
     baseUrl: string;
     apiKey: string;
+    apiFormat: ApiCallFormat;
     localChannels: LocalModelChannel[];
     imageChannelId: string;
     videoChannelId: string;
@@ -67,6 +71,7 @@ export const defaultConfig: AiConfig = {
     channelMode: "local",
     baseUrl: "https://api.openai.com",
     apiKey: "",
+    apiFormat: "openai",
     localChannels: [],
     imageChannelId: "",
     videoChannelId: "",
@@ -156,10 +161,11 @@ export function normalizeLocalChannels(config: Partial<AiConfig>) {
         name: typeof channel.name === "string" ? channel.name : `本地渠道 ${index + 1}`,
         baseUrl: channel.baseUrl || "",
         apiKey: channel.apiKey || "",
+        apiFormat: normalizeApiFormat(channel.apiFormat || config.apiFormat),
         models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
     }));
     if (!normalized.length) {
-        normalized.push({ id: "local-default", name: "本地直连", baseUrl: config.baseUrl || defaultConfig.baseUrl, apiKey: config.apiKey || "", models: Array.isArray(config.models) ? config.models.filter(Boolean) : [] });
+        normalized.push({ id: "local-default", name: "本地直连", baseUrl: config.baseUrl || defaultConfig.baseUrl, apiKey: config.apiKey || "", apiFormat: normalizeApiFormat(config.apiFormat), models: Array.isArray(config.models) ? config.models.filter(Boolean) : [] });
     }
     return normalized;
 }
@@ -219,6 +225,7 @@ export const useConfigStore = create<ConfigStore>()(
                         localChannels,
                         baseUrl: localChannels[0]?.baseUrl || config.baseUrl,
                         apiKey: localChannels[0]?.apiKey || config.apiKey,
+                        apiFormat: localChannels[0]?.apiFormat || normalizeApiFormat(config.apiFormat),
                         imageChannelId: config.imageChannelId || localChannels[0]?.id || "",
                         videoChannelId: config.videoChannelId || localChannels[0]?.id || "",
                         textChannelId: config.textChannelId || localChannels[0]?.id || "",
@@ -258,6 +265,14 @@ export function buildApiUrl(baseUrl: string, path: string) {
     const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
     const apiBaseUrl = normalizedBaseUrl.endsWith("/v1") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return `${apiBaseUrl}${path}`;
+}
+
+export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
+    return apiFormat === "gemini" ? "https://generativelanguage.googleapis.com" : defaultConfig.baseUrl;
+}
+
+export function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
+    return apiFormat === "gemini" ? "gemini" : "openai";
 }
 
 export function channelIdForActiveModel(config: AiConfig) {

@@ -27,12 +27,21 @@ var gptImage2CaseFiles = []string{"README.md", "cases/ad-creative.md", "cases/ch
 
 type gptImage2Data struct {
 	Records []struct {
-		Title    string `json:"title"`
-		TweetURL string `json:"tweet_url"`
-		ImageDir string `json:"image_dir"`
-		Category string `json:"category"`
-		AddedAt  string `json:"added_at"`
+		Title          string   `json:"title"`
+		SuggestedTitle string   `json:"suggested_title"`
+		TweetURL       string   `json:"tweet_url"`
+		ImageDir       string   `json:"image_dir"`
+		Category       string   `json:"category"`
+		SuggestedCat   string   `json:"suggested_category"`
+		PromptText     string   `json:"prompt_text"`
+		MediaURLs      []string `json:"media_urls"`
+		AddedAt        string   `json:"added_at"`
 	} `json:"records"`
+}
+
+type gptImage2Case struct {
+	Prompt string
+	Images []string
 }
 
 type davidWuGptImage2Prompt struct {
@@ -100,7 +109,7 @@ func fetchText(baseURL, file string) (string, error) {
 }
 
 func buildGptImage2Prompts() ([]model.Prompt, error) {
-	cases := map[string]string{}
+	cases := map[string]gptImage2Case{}
 	raw, err := fetchText(gptImage2RawBase, "data/ingested_tweets.json")
 	if err != nil {
 		return nil, err
@@ -118,21 +127,58 @@ func buildGptImage2Prompts() ([]model.Prompt, error) {
 	}
 	items := []model.Prompt{}
 	for _, item := range data.Records {
-		prompt := cases[item.TweetURL]
+		remoteCase := cases[normalizeTweetURL(item.TweetURL)]
+		prompt := strings.TrimSpace(item.PromptText)
+		if prompt == "" {
+			prompt = remoteCase.Prompt
+		}
 		if prompt == "" {
 			continue
 		}
-		image := gptImage2RawBase + "/" + item.ImageDir + "/output.jpg"
-		items = append(items, model.Prompt{ID: "gpt-image-2-prompts-" + leftPad(len(items)+1), Title: item.Title, CoverURL: image, Prompt: prompt, Tags: tagsFromCategory(item.Category), CreatedAt: item.AddedAt, UpdatedAt: item.AddedAt, Preview: markdownPreview([]string{image})})
+		images := gptImage2RecordImages(item.ImageDir, item.MediaURLs, remoteCase.Images)
+		cover := ""
+		if len(images) > 0 {
+			cover = images[0]
+		}
+		title := strings.TrimSpace(item.Title)
+		if title == "" {
+			title = strings.TrimSpace(item.SuggestedTitle)
+		}
+		category := strings.TrimSpace(item.Category)
+		if category == "" {
+			category = strings.TrimSpace(item.SuggestedCat)
+		}
+		items = append(items, model.Prompt{ID: "gpt-image-2-prompts-" + leftPad(len(items)+1), Title: title, CoverURL: cover, Prompt: prompt, Tags: tagsFromCategory(category), CreatedAt: item.AddedAt, UpdatedAt: item.AddedAt, Preview: markdownPreview(images)})
 	}
 	return items, nil
 }
 
-func collectGptImage2Cases(cases map[string]string, markdown string) {
-	re := regexp.MustCompile("(?s)### Case \\d+: \\[[^\\]]+\\]\\(([^)]+)\\).*?\\*\\*Prompt:\\*\\*\\s*\\r?\\n\\s*```[\\w-]*\\r?\\n(.*?)\\r?\\n```")
-	for _, match := range re.FindAllStringSubmatch(markdown, -1) {
-		cases[match[1]] = strings.TrimSpace(match[2])
+func collectGptImage2Cases(cases map[string]gptImage2Case, markdown string) {
+	for _, block := range splitBeforeHeading(markdown, "### Case ") {
+		if !strings.HasPrefix(strings.TrimSpace(block), "### Case ") {
+			continue
+		}
+		tweetURL := normalizeTweetURL(firstMatch(block, `(https://(?:x|twitter)\.com/[^)\s]+/status/\d+[^)\s]*)`))
+		prompt := strings.TrimSpace(firstMatch(block, "(?s)\\*\\*Prompt:?\\*\\*:?\\s*\\r?\\n\\s*```[\\w-]*\\r?\\n(.*?)\\r?\\n```"))
+		if tweetURL == "" || prompt == "" {
+			continue
+		}
+		cases[tweetURL] = gptImage2Case{Prompt: prompt, Images: extractMarkdownImages(gptImage2RawBase, block)}
 	}
+}
+
+func gptImage2RecordImages(imageDir string, mediaURLs []string, fallback []string) []string {
+	imageDir = strings.TrimSpace(imageDir)
+	if imageDir != "" {
+		image := absoluteImage(gptImage2RawBase, strings.TrimRight(imageDir, "/")+"/output.jpg")
+		if image != "" {
+			return []string{image}
+		}
+	}
+	if len(mediaURLs) > 0 {
+		return compactImages(mediaURLs)
+	}
+	return fallback
 }
 
 func buildAwesomeGptImagePrompts() ([]model.Prompt, error) {
@@ -333,11 +379,41 @@ func extractMarkdownImages(baseURL string, block string) []string {
 	return images
 }
 
+func compactImages(images []string) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, image := range images {
+		image = strings.TrimSpace(image)
+		if image == "" || seen[image] {
+			continue
+		}
+		seen[image] = true
+		result = append(result, image)
+	}
+	return result
+}
+
 func absoluteImage(baseURL, image string) string {
+	image = strings.TrimSpace(image)
 	if image == "" || strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://") {
 		return image
 	}
-	return baseURL + "/" + strings.TrimLeft(strings.TrimPrefix(image, "."), "/")
+	for strings.HasPrefix(image, "../") || strings.HasPrefix(image, "./") {
+		image = strings.TrimPrefix(strings.TrimPrefix(image, "../"), "./")
+	}
+	return strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(image, "/")
+}
+
+func normalizeTweetURL(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimRight(value, "/")
+	value = strings.TrimPrefix(value, "https://twitter.com/")
+	value = strings.TrimPrefix(value, "https://x.com/")
+	if value == "" {
+		return ""
+	}
+	parts := strings.Split(value, "?")
+	return strings.ToLower(strings.TrimRight(parts[0], "/"))
 }
 
 func leftPad(value int) string {

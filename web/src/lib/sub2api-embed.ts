@@ -164,6 +164,7 @@ function buildSub2APIEmbedChannel(payload: Sub2APIEmbedConfig, role: Sub2APIEmbe
         name: `Sub2API ${roleName}：${selectedKey.group?.name || selectedKey.name || "当前账号"}`,
         baseUrl: payload.proxyBaseUrl,
         apiKey: selectedKey.key,
+        apiFormat: "openai",
         models: models?.length ? models : SUB2API_EMBED_MODEL_FALLBACKS[role],
     };
 }

@@ -10,9 +10,14 @@ import { fetchSub2APIEmbedConfig } from "@/services/api/sub2api-embed";
 import { fetchUserConfig, measureUserStorageProvider, syncUserModelConfig, syncUserStorageProvider } from "@/services/api/user-config";
 import { defaultUserStorageProvider, saveUserStorageProvider, USER_STORAGE_PROVIDER_KEY, type UserStorageProvider, clearStorageConfigCache as clearImageStorageCache } from "@/services/image-storage";
 import { clearStorageConfigCache as clearFileStorageCache } from "@/services/file-storage";
-import { normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel } from "@/stores/use-config-store";
+import { defaultBaseUrlForApiFormat, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type ApiCallFormat, type LocalModelChannel } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { buildSub2APIEmbedConfig, isSub2APIEmbedded, readSub2APIEmbedParams, sub2APIEmbedChannelId, SUB2API_EMBED_IMAGE_CHANNEL_ID, SUB2API_EMBED_TEXT_CHANNEL_ID, type Sub2APIEmbedConfig, type Sub2APIEmbedKey, type Sub2APIEmbedRole, type Sub2APIEmbedSelectedKeys } from "@/lib/sub2api-embed";
+
+const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
+    { label: "OpenAI 兼容", value: "openai" },
+    { label: "Gemini", value: "gemini" },
+];
 
 export function AppConfigModal() {
     const { message, modal } = App.useApp();
@@ -43,6 +48,7 @@ export function AppConfigModal() {
     const [migrationProgress, setMigrationProgress] = useState({ current: 0, total: 0 });
     const [embedConfig, setEmbedConfig] = useState<Sub2APIEmbedConfig | null>(null);
     const [loadingEmbedConfig, setLoadingEmbedConfig] = useState(false);
+    const [diagnosingChannelId, setDiagnosingChannelId] = useState("");
 
     const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
     const [selectingChannelId, setSelectingChannelId] = useState("");
@@ -361,8 +367,16 @@ export function AppConfigModal() {
         updateLocalChannels(normalizeLocalChannels(config).map((channel) => (channel.id === id ? { ...channel, ...patch } : channel)));
     };
 
+    const patchLocalChannelApiFormat = (channel: LocalModelChannel, apiFormat: ApiCallFormat) => {
+        const currentDefault = defaultBaseUrlForApiFormat(channel.apiFormat);
+        const nextDefault = defaultBaseUrlForApiFormat(apiFormat);
+        const currentBaseUrl = channel.baseUrl.trim().replace(/\/+$/, "");
+        const shouldReplaceBaseUrl = !currentBaseUrl || currentBaseUrl === currentDefault.replace(/\/+$/, "");
+        patchLocalChannel(channel.id, { apiFormat, baseUrl: shouldReplaceBaseUrl ? nextDefault : channel.baseUrl });
+    };
+
     const addLocalChannel = () => {
-        updateLocalChannels([...normalizeLocalChannels(config), { id: `local-${Date.now()}`, name: "新渠道", baseUrl: "", apiKey: "", models: [] }]);
+        updateLocalChannels([...normalizeLocalChannels(config), { id: `local-${Date.now()}`, name: "新渠道", baseUrl: defaultBaseUrlForApiFormat("openai"), apiKey: "", apiFormat: "openai", models: [] }]);
     };
 
     const removeLocalChannel = (id: string) => {
@@ -392,13 +406,13 @@ export function AppConfigModal() {
         const entries = await Promise.all(
             (["image", "text", "video"] as Sub2APIEmbedRole[]).map(async (role) => {
                 const channel = baseConfig.localChannels.find((item) => item.id === sub2APIEmbedChannelId(role));
-                if (!channel) return [role, []] as const;
+                if (!channel) return [role, [] as string[]] as const;
                 try {
                     const models = await fetchImageModels({ ...baseConfig, channelMode: "local", baseUrl: channel.baseUrl, apiKey: channel.apiKey, localChannels: [{ ...channel, models: channel.models }], model: channel.models[0] || baseConfig.model });
                     return [role, uniqueModels(models)] as const;
                 } catch (error) {
                     console.warn(`读取 Sub2API ${role} 模型列表失败`, error);
-                    return [role, []] as const;
+                    return [role, [] as string[]] as const;
                 }
             }),
         );
@@ -418,9 +432,10 @@ export function AppConfigModal() {
             const models = await fetchImageModels({ ...config, channelMode: "local", baseUrl: channel.baseUrl, apiKey: channel.apiKey, localChannels: [{ ...channel, models: channel.models }], model: channel.models[0] || config.model });
             
             const current = uniqueModels(channel.models || []);
+            const fetched = uniqueModels(models);
             setModelSelectExisting(current);
-            setModelSelectSource(uniqueModels(models));
-            setModelSelectSelected(uniqueModels([...current, ...models]));
+            setModelSelectSource(fetched);
+            setModelSelectSelected(fetched);
             setSelectingChannelId(channel.id);
             setModelSelectKeyword("");
             setModelSelectNewModel("");
@@ -434,6 +449,74 @@ export function AppConfigModal() {
         }
     };
 
+    const diagnoseLocalChannel = async (channel: LocalModelChannel) => {
+        if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
+            message.error("请先填写该渠道的 Base URL 和 API Key");
+            return;
+        }
+        setDiagnosingChannelId(channel.id);
+        try {
+            const models = uniqueModels(await fetchImageModels({ ...config, channelMode: "local", baseUrl: channel.baseUrl, apiKey: channel.apiKey, localChannels: [{ ...channel, models: channel.models }], model: channel.models[0] || config.model }));
+            const roleModels = [
+                { label: "生图", model: config.imageModel, channelId: config.imageChannelId },
+                { label: "视频", model: config.videoModel, channelId: config.videoChannelId },
+                { label: "文本", model: config.textModel, channelId: config.textChannelId },
+            ].filter((item) => item.channelId === channel.id && item.model);
+            const missingModels = roleModels.filter((item) => !models.includes(item.model));
+            const image2Hint = missingModels.some((item) => item.model === "image2") && models.includes("gpt-image-2");
+
+            modal.info({
+                title: `${channel.name || "本地渠道"} 诊断`,
+                width: 620,
+                content: (
+                    <div className="space-y-3 pt-1 text-sm">
+                        <div className="rounded-md bg-stone-50 p-3 text-stone-600 dark:bg-stone-900 dark:text-stone-300">
+                            模型列表接口可访问，当前按 {channel.apiFormat === "gemini" ? "Gemini" : "OpenAI 兼容"} 格式请求；诊断只读取模型列表，不会调用生图接口。
+                        </div>
+                        <div>
+                            <div className="mb-1 font-medium">接口返回模型</div>
+                            <Typography.Paragraph className="!mb-0" copyable={models.length ? { text: models.join("\n") } : false}>
+                                {models.length ? models.join("、") : "接口没有返回模型"}
+                            </Typography.Paragraph>
+                        </div>
+                        {roleModels.length ? (
+                            <div>
+                                <div className="mb-1 font-medium">默认模型匹配</div>
+                                <div className="space-y-1">
+                                    {roleModels.map((item) => (
+                                        <div key={`${item.label}-${item.model}`} className={models.includes(item.model) ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300"}>
+                                            {item.label}：{item.model} {models.includes(item.model) ? "已在接口返回列表中" : "不在接口返回列表中"}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="text-stone-500">该渠道当前未绑定为默认生图、视频或文本渠道。</div>
+                        )}
+                        {image2Hint ? (
+                            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                                当前接口真实返回的是 gpt-image-2；如果默认生图模型填的是 image2，请改为 gpt-image-2 后再生成。
+                            </div>
+                        ) : null}
+                        {missingModels.length && !image2Hint ? (
+                            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                                有默认模型不在接口返回列表中，生成时可能被上游拒绝。建议在模型选择中改为接口真实返回的模型。
+                            </div>
+                        ) : null}
+                    </div>
+                ),
+            });
+        } catch (error) {
+            modal.error({
+                title: `${channel.name || "本地渠道"} 诊断失败`,
+                width: 620,
+                content: <div className="whitespace-pre-wrap text-sm">{error instanceof Error ? error.message : "模型接口不可访问"}</div>,
+            });
+        } finally {
+            setDiagnosingChannelId("");
+        }
+    };
+
     const refetchModelsInSelector = async () => {
         const channel = normalizeLocalChannels(config).find((c) => c.id === selectingChannelId);
         if (!channel) return;
@@ -441,9 +524,10 @@ export function AppConfigModal() {
         try {
             const models = await fetchImageModels({ ...config, channelMode: "local", baseUrl: channel.baseUrl, apiKey: channel.apiKey, localChannels: [{ ...channel, models: channel.models }], model: channel.models[0] || config.model });
             const current = uniqueModels(modelSelectSelected);
+            const fetched = uniqueModels(models);
             setModelSelectExisting(current);
-            setModelSelectSource(uniqueModels(models));
-            setModelSelectSelected(uniqueModels([...current, ...models]));
+            setModelSelectSource(fetched);
+            setModelSelectSelected(fetched);
             setModelSelectKeyword("");
             setModelSelectNewModel("");
             setModelSelectTab("new");
@@ -497,6 +581,12 @@ export function AppConfigModal() {
     const confirmChannelModelSelector = () => {
         const models = uniqueModels(modelSelectSelected);
         patchLocalChannel(selectingChannelId, { models });
+        const fallbackModel = models[0] || "";
+        if (fallbackModel) {
+            if (config.imageChannelId === selectingChannelId && !models.includes(config.imageModel)) updateConfig("imageModel", fallbackModel);
+            if (config.videoChannelId === selectingChannelId && !models.includes(config.videoModel)) updateConfig("videoModel", fallbackModel);
+            if (config.textChannelId === selectingChannelId && !models.includes(config.textModel)) updateConfig("textModel", fallbackModel);
+        }
         closeChannelModelSelector();
     };
 
@@ -632,20 +722,24 @@ export function AppConfigModal() {
                                 </div>
                                 {normalizeLocalChannels(config).map((channel, index) => (
                                     <div key={channel.id} className="space-y-2 rounded-md bg-stone-50 p-2 dark:bg-stone-900">
-                                        <div className="grid gap-2 md:grid-cols-[160px_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                                        <div className="grid gap-2 md:grid-cols-[140px_132px_minmax(0,1fr)_minmax(0,1fr)_auto]">
                                             <Input value={channel.name} placeholder="渠道名称" onChange={(event) => patchLocalChannel(channel.id, { name: event.target.value })} />
+                                            <Select value={channel.apiFormat} options={apiFormatOptions} onChange={(value) => patchLocalChannelApiFormat(channel, value)} />
                                             <Input value={channel.baseUrl} placeholder="Base URL" onChange={(event) => patchLocalChannel(channel.id, { baseUrl: event.target.value })} />
                                             <Input.Password value={channel.apiKey} placeholder="API Key" onChange={(event) => patchLocalChannel(channel.id, { apiKey: event.target.value })} />
                                             <div className="flex gap-2">
                                                 <Button size="small" loading={loadingModels} onClick={() => void refreshLocalChannelModels(channel)}>
                                                     拉取
                                                 </Button>
+                                                <Button size="small" loading={diagnosingChannelId === channel.id} onClick={() => void diagnoseLocalChannel(channel)}>
+                                                    诊断
+                                                </Button>
                                                 <Button size="small" danger disabled={index === 0 && normalizeLocalChannels(config).length === 1} onClick={() => removeLocalChannel(channel.id)}>
                                                     删除
                                                 </Button>
                                             </div>
                                         </div>
-                                        <div className="text-xs text-stone-500">已保存 {channel.models.length} 个模型</div>
+                                        <div className="text-xs text-stone-500">已保存 {channel.models.length} 个模型 · 当前按 {channel.apiFormat === "gemini" ? "Gemini" : "OpenAI 兼容"} 格式请求</div>
                                     </div>
                                 ))}
                             </div>

@@ -1,8 +1,8 @@
-import axios from "axios";
+import axios, { type AxiosRequestConfig, type AxiosResponse } from "axios";
 
 import { dataUrlToFile } from "@/lib/image-utils";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
-import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, normalizeApiFormat, type AiConfig, type ApiCallFormat } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import { nanoid } from "nanoid";
@@ -18,6 +18,24 @@ type ImageApiResponse = {
     code?: number;
     msg?: string;
 };
+
+type GeminiPart = {
+    text?: string;
+    inlineData?: { mimeType?: string; data?: string };
+    inline_data?: { mime_type?: string; mimeType?: string; data?: string };
+    fileData?: { mimeType?: string; fileUri?: string };
+};
+
+type GeminiContent = { role?: "user" | "model"; parts: GeminiPart[] };
+
+type GeminiPayload = {
+    candidates?: Array<{ content?: { parts?: GeminiPart[] }; finishReason?: string }>;
+    models?: Array<{ name?: string }>;
+    error?: { message?: string };
+    promptFeedback?: { blockReason?: string };
+};
+
+type GeminiTextStreamState = { buffer: string; text: string; error?: string };
 
 type GeneratedImage = { id: string; dataUrl: string; seed?: number };
 
@@ -68,7 +86,12 @@ const MIME_MAP: Record<ImageRequestParams["outputFormat"], string> = {
     jpeg: "image/jpeg",
     webp: "image/webp",
 };
+const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
+const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
 const PROMPT_REWRITE_GUARD_PREFIX = "Use the following text as the complete prompt. Do not rewrite it:";
+const LOCAL_AI_PROXY_BASE_HEADER = "X-Canvas-AI-Base-URL";
+const MAX_ERROR_MESSAGE_LENGTH = 260;
+const MAX_ERROR_DETAIL_LENGTH = 12000;
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
@@ -173,20 +196,58 @@ function parseImagePayload(payload: ImageApiResponse, mime: string): GeneratedIm
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
         const responseData = error.response?.data;
-        return responseData?.msg || responseData?.error?.message || (error.response?.status ? `${fallback}：${error.response.status}` : fallback);
+        return normalizeErrorMessage(responseData?.msg || responseData?.error?.message || "", error.response?.status ? `${fallback}：${error.response.status}` : fallback);
     }
-    return error instanceof Error ? error.message : fallback;
+    return normalizeErrorMessage(error instanceof Error ? error.message : "", fallback);
+}
+
+function compactErrorText(value: string) {
+    return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateErrorText(value: string, maxLength: number) {
+    return value.length > maxLength ? `${value.slice(0, maxLength)}\n\n...内容过长，已截断...` : value;
+}
+
+function normalizeErrorMessage(message: string, fallback: string) {
+    const text = compactErrorText(message || fallback);
+    if (/image generation is not enabled for this group/i.test(text)) {
+        return "当前 API Key 所属分组未开启图片生成权限，请在上游后台为该分组开启图片生成，或切换到有生图权限的 Key。";
+    }
+    if (/invalid api key/i.test(text)) {
+        return "API Key 无效或已失效，请检查当前渠道的 API Key。";
+    }
+    if (/model is not supported when using codex with a chatgpt account/i.test(text)) {
+        return "当前账号不支持调用这个模型，请切换模型或上游账号。";
+    }
+    if (/images endpoint requires an image model/i.test(text)) {
+        const invalidModel = text.match(/got "([^"]+)"/i)?.[1];
+        const modelTip = invalidModel ? `当前填写的是 ${invalidModel}，` : "";
+        return `${modelTip}上游图片接口不认可这个模型名，请在配置里先拉取模型列表，并改用接口真实返回的图片模型。`;
+    }
+    return truncateErrorText(text || fallback, MAX_ERROR_MESSAGE_LENGTH);
+}
+
+function isHtmlErrorResponse(contentType: string, text: string) {
+    const head = text.trim().slice(0, 300).toLowerCase();
+    return contentType.toLowerCase().includes("text/html") || head.startsWith("<!doctype html") || head.startsWith("<html") || head.includes("<body");
 }
 
 async function fetchErrorDetail(response: Response, fallback: string) {
     try {
         const text = await response.text();
         if (!text.trim()) return { message: `${fallback}：${response.status}`, detail: `${response.status} ${response.statusText}` };
+        if (isHtmlErrorResponse(response.headers.get("Content-Type") || "", text)) {
+            return {
+                message: "上游返回了网页错误页面，请检查 Base URL 是否填写为接口根地址。",
+                detail: truncateErrorText(text.trim(), MAX_ERROR_DETAIL_LENGTH),
+            };
+        }
         try {
             const payload = JSON.parse(text) as { error?: { message?: string }; msg?: string; message?: string };
-            return { message: payload.msg || payload.error?.message || payload.message || `${fallback}：${response.status}`, detail: payload };
+            return { message: normalizeErrorMessage(payload.msg || payload.error?.message || payload.message || "", `${fallback}：${response.status}`), detail: payload };
         } catch {
-            return { message: text.trim() || `${fallback}：${response.status}`, detail: text };
+            return { message: normalizeErrorMessage(text.trim(), `${fallback}：${response.status}`), detail: truncateErrorText(text, MAX_ERROR_DETAIL_LENGTH) };
         }
     } catch {
         return { message: `${fallback}：${response.status}`, detail: `${response.status} ${response.statusText}` };
@@ -195,11 +256,11 @@ async function fetchErrorDetail(response: Response, fallback: string) {
 
 function formatErrorDetail(detail: unknown) {
     if (detail == null) return "";
-    if (typeof detail === "string") return detail;
+    if (typeof detail === "string") return truncateErrorText(detail, MAX_ERROR_DETAIL_LENGTH);
     try {
-        return JSON.stringify(detail, null, 2);
+        return truncateErrorText(JSON.stringify(detail, null, 2), MAX_ERROR_DETAIL_LENGTH);
     } catch {
-        return String(detail);
+        return truncateErrorText(String(detail), MAX_ERROR_DETAIL_LENGTH);
     }
 }
 
@@ -220,8 +281,27 @@ async function withTimeout<T>(timeoutSeconds: number, run: (signal: AbortSignal)
     }
 }
 
+async function parseResponseWithTimeout<T>(response: Response, timeoutSeconds: number, parseResponse: (response: Response) => Promise<T>) {
+    let timeoutId: number | undefined;
+    try {
+        return await new Promise<T>((resolve, reject) => {
+            timeoutId = window.setTimeout(() => {
+                void response.body?.cancel().catch(() => {});
+                reject(new Error(timeoutError(timeoutSeconds)));
+            }, timeoutSeconds * 1000);
+            parseResponse(response).then(resolve, reject);
+        });
+    } finally {
+        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    }
+}
+
 function isTransientStatus(status: number) {
     return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+function isRequestTimeoutError(error: unknown) {
+    return error instanceof Error && error.message.startsWith("请求超时：");
 }
 
 function retryDelay(attempt: number) {
@@ -237,6 +317,7 @@ async function requestWithTransientRetry(run: () => Promise<Response>, retries =
             lastError = new Error(`上游接口临时不可用：${response.status}`);
         } catch (error) {
             lastError = error;
+            if (isRequestTimeoutError(error)) throw error;
             if (attempt === retries) throw error;
         }
         await new Promise((resolve) => window.setTimeout(resolve, retryDelay(attempt + 1)));
@@ -346,6 +427,21 @@ function aiApiUrl(config: AiConfig, path: string) {
     return buildApiUrl(channel?.baseUrl || config.baseUrl, path);
 }
 
+function localProxyUrlFromPath(path: string) {
+    const encodedPath = path
+        .split("/")
+        .filter(Boolean)
+        .map((segment) => encodeURIComponent(segment).replace(/%3A/g, ":"))
+        .join("/");
+    return `/api/local-ai-proxy/${encodedPath}`;
+}
+
+function localProxyOpenAIUrl(config: AiConfig, path: string) {
+    const lowerBaseUrl = activeLocalBaseUrl(config).trim().replace(/\/+$/, "").toLowerCase();
+    const proxyPath = lowerBaseUrl.endsWith("/v1") ? path : `/v1${path}`;
+    return localProxyUrlFromPath(proxyPath);
+}
+
 function aiHeaders(config: AiConfig, contentType?: string) {
     const token = useUserStore.getState().token;
     if (config.channelMode === "remote" && !token) throw new Error("请先登录后再使用云端渠道");
@@ -359,6 +455,109 @@ function aiHeaders(config: AiConfig, contentType?: string) {
               Authorization: `Bearer ${localChannelForActiveModel(config)?.apiKey || config.apiKey}`,
               ...(contentType ? { "Content-Type": contentType } : {}),
           };
+}
+
+function activeApiFormat(config: AiConfig): ApiCallFormat {
+    if (config.channelMode === "remote") return "openai";
+    return normalizeApiFormat(localChannelForActiveModel(config)?.apiFormat || config.apiFormat);
+}
+
+function activeLocalBaseUrl(config: AiConfig) {
+    return localChannelForActiveModel(config)?.baseUrl || config.baseUrl;
+}
+
+function activeLocalApiKey(config: AiConfig) {
+    return localChannelForActiveModel(config)?.apiKey || config.apiKey;
+}
+
+function geminiBaseUrl(config: AiConfig) {
+    const normalizedBaseUrl = activeLocalBaseUrl(config).trim().replace(/\/+$/, "");
+    const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
+    return lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/v1beta") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1beta`;
+}
+
+function geminiModelName(model: string) {
+    return model.trim().replace(/^models\//, "");
+}
+
+function geminiApiUrl(config: AiConfig, action?: "generateContent" | "streamGenerateContent") {
+    const baseUrl = geminiBaseUrl(config);
+    if (!action) return `${baseUrl}/models`;
+    return `${baseUrl}/models/${encodeURIComponent(geminiModelName(config.model))}:${action}`;
+}
+
+function localProxyGeminiApiUrl(config: AiConfig, action?: "generateContent" | "streamGenerateContent") {
+    const lowerBaseUrl = activeLocalBaseUrl(config).trim().replace(/\/+$/, "").toLowerCase();
+    const versionPrefix = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/v1beta") ? "" : "/v1beta";
+    const path = action ? `${versionPrefix}/models/${geminiModelName(config.model)}:${action}` : `${versionPrefix}/models`;
+    return localProxyUrlFromPath(path);
+}
+
+function geminiHeaders(config: AiConfig) {
+    return {
+        "x-goog-api-key": activeLocalApiKey(config),
+        "Content-Type": "application/json",
+    };
+}
+
+function headersWithLocalProxyBase(config: AiConfig, headers: HeadersInit | undefined) {
+    const nextHeaders = new Headers(headers);
+    nextHeaders.set(LOCAL_AI_PROXY_BASE_HEADER, activeLocalBaseUrl(config));
+    return nextHeaders;
+}
+
+function axiosHeadersWithLocalProxyBase(config: AiConfig, headers: Record<string, string>) {
+    return { ...headers, [LOCAL_AI_PROXY_BASE_HEADER]: activeLocalBaseUrl(config) };
+}
+
+function isNetworkRequestError(error: unknown) {
+    if (axios.isAxiosError(error)) return !error.response;
+    if (error instanceof TypeError) return true;
+    const message = error instanceof Error ? error.message : String(error || "");
+    return /failed to fetch|networkerror|load failed|network request failed/i.test(message);
+}
+
+function shouldUseLocalProxyFallback(config: AiConfig, error: unknown) {
+    return config.channelMode === "local" && isNetworkRequestError(error);
+}
+
+async function fetchWithLocalProxyFallback(config: AiConfig, directUrl: string, proxyUrl: string, timeoutSeconds: number, init: RequestInit) {
+    return requestWithTransientRetry(() =>
+        withTimeout(timeoutSeconds, async (signal) => {
+            try {
+                return await fetch(directUrl, { ...init, signal });
+            } catch (error) {
+                if (!proxyUrl || !shouldUseLocalProxyFallback(config, error)) throw error;
+                return fetch(proxyUrl, { ...init, headers: headersWithLocalProxyBase(config, init.headers), signal });
+            }
+        }),
+    );
+}
+
+function fetchOpenAIEndpoint(config: AiConfig, path: string, timeoutSeconds: number, init: RequestInit) {
+    return fetchWithLocalProxyFallback(config, aiApiUrl(config, path), config.channelMode === "local" ? localProxyOpenAIUrl(config, path) : "", timeoutSeconds, init);
+}
+
+function fetchGeminiEndpoint(config: AiConfig, action: "generateContent" | "streamGenerateContent", timeoutSeconds: number, init: RequestInit, query = "") {
+    return fetchWithLocalProxyFallback(config, `${geminiApiUrl(config, action)}${query}`, config.channelMode === "local" ? `${localProxyGeminiApiUrl(config, action)}${query}` : "", timeoutSeconds, init);
+}
+
+async function axiosGetWithLocalProxyFallback<T>(config: AiConfig, directUrl: string, proxyUrl: string, options: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    try {
+        return await axios.get<T>(directUrl, options);
+    } catch (error) {
+        if (!proxyUrl || !shouldUseLocalProxyFallback(config, error)) throw error;
+        return axios.get<T>(proxyUrl, { ...options, headers: axiosHeadersWithLocalProxyBase(config, (options.headers || {}) as Record<string, string>) });
+    }
+}
+
+async function axiosPostWithLocalProxyFallback<T>(config: AiConfig, directUrl: string, proxyUrl: string, data: unknown, options: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    try {
+        return await axios.post<T>(directUrl, data, options);
+    } catch (error) {
+        if (!proxyUrl || !shouldUseLocalProxyFallback(config, error)) throw error;
+        return axios.post<T>(proxyUrl, data, { ...options, headers: axiosHeadersWithLocalProxyBase(config, (options.headers || {}) as Record<string, string>) });
+    }
 }
 
 function refreshRemoteUser(config: AiConfig) {
@@ -447,6 +646,233 @@ function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) 
     return systemPrompt ? [{ role: "system" as const, content: systemPrompt }, ...messages] : messages;
 }
 
+function validateGeminiPayload(payload: GeminiPayload) {
+    if (payload.error?.message) throw new ImageRequestError(payload.error.message, payload);
+    if (payload.promptFeedback?.blockReason) throw new ImageRequestError(`Gemini 拒绝了本次请求：${payload.promptFeedback.blockReason}`, payload);
+}
+
+function toGeminiBody(config: AiConfig, messages: ChatCompletionMessage[], extra?: Record<string, unknown>) {
+    const systemText = [
+        (config.systemPrompts.text || config.systemPrompt).trim(),
+        ...messages.flatMap((message) => (message.role === "system" ? [geminiTextContent(message.content)] : [])),
+    ]
+        .filter(Boolean)
+        .join("\n\n");
+    const contents = toGeminiContents(messages.filter((message) => message.role !== "system"));
+    return {
+        contents,
+        ...(systemText ? { systemInstruction: { parts: [{ text: systemText }] } } : {}),
+        ...extra,
+    };
+}
+
+function toGeminiContents(messages: ChatCompletionMessage[]): GeminiContent[] {
+    return messages.map((message) => ({ role: message.role === "assistant" ? "model" : "user", parts: toGeminiParts(message.content) }));
+}
+
+function toGeminiParts(content: ChatCompletionMessage["content"]): GeminiPart[] {
+    if (!Array.isArray(content)) return [{ text: String(content || "") }];
+    return content.map((item) => (item.type === "text" ? { text: item.text } : toGeminiImagePart(item.image_url.url)));
+}
+
+function toGeminiImagePart(url: string): GeminiPart {
+    const match = url.match(/^data:([^;,]+);base64,(.+)$/);
+    if (match) return { inlineData: { mimeType: match[1], data: match[2] } };
+    return { fileData: { fileUri: url, mimeType: "image/png" } };
+}
+
+function geminiTextContent(content: ChatCompletionMessage["content"]) {
+    if (!Array.isArray(content)) return String(content || "");
+    return content.map((item) => (item.type === "text" ? item.text : item.image_url.url)).join("\n");
+}
+
+function parseImageRatio(value: string) {
+    const parts = value.split(":");
+    if (parts.length !== 2) throw new ImageRequestError("图像比例格式不支持，请使用 auto、9:16 或 1024x1024");
+    const w = Number(parts[0]);
+    const h = Number(parts[1]);
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) throw new ImageRequestError("图像比例必须是正数，例如 9:16");
+    return { width: w, height: h };
+}
+
+function parseImageDimensions(value: string) {
+    const match = value.match(/^(\d+)x(\d+)$/i);
+    if (!match) return null;
+    return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+function closestGeminiAspectRatio(value: string) {
+    const ratio = parseImageRatio(value);
+    const target = ratio.width / ratio.height;
+    return GEMINI_SUPPORTED_RATIOS.reduce((best, item) => {
+        const current = parseImageRatio(item);
+        const bestRatio = parseImageRatio(best);
+        return Math.abs(current.width / current.height - target) < Math.abs(bestRatio.width / bestRatio.height - target) ? item : best;
+    });
+}
+
+function resolveGeminiImageSize(config: AiConfig, dimensions: { width: number; height: number } | null) {
+    const normalizedQuality = normalizeQuality(config.quality);
+    if (normalizedQuality !== "auto") return GEMINI_IMAGE_SIZE_BY_QUALITY[normalizedQuality];
+    if (!dimensions) return undefined;
+    const edge = Math.max(dimensions.width, dimensions.height);
+    if (edge <= 768) return "512";
+    if (edge <= 1536) return "1K";
+    if (edge <= 3072) return "2K";
+    return "4K";
+}
+
+function supportsGeminiImageSize(model: string) {
+    const value = model.toLowerCase();
+    return value.includes("gemini-3") || value.includes("3.1") || value.includes("3-pro");
+}
+
+function resolveGeminiImageConfig(config: AiConfig) {
+    const value = config.size.trim();
+    const dimensions = parseImageDimensions(value);
+    const ratio = dimensions ? `${dimensions.width}:${dimensions.height}` : value;
+    const aspectRatio = value && value.toLowerCase() !== "auto" ? closestGeminiAspectRatio(ratio) : undefined;
+    const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config, dimensions) : undefined;
+    const image = { ...(aspectRatio ? { aspectRatio } : {}), ...(imageSize ? { imageSize } : {}) };
+    return Object.keys(image).length ? { responseFormat: { image } } : {};
+}
+
+function parseGeminiImagePayload(payload: GeminiPayload) {
+    validateGeminiPayload(payload);
+    const images =
+        payload.candidates
+            ?.flatMap((candidate) => candidate.content?.parts || [])
+            .map((part) => {
+                const inlineData = part.inlineData || (part.inline_data ? { mimeType: part.inline_data.mimeType || part.inline_data.mime_type, data: part.inline_data.data } : undefined);
+                if (inlineData?.data) return `data:${inlineData.mimeType || "image/png"};base64,${inlineData.data}`;
+                return part.fileData?.fileUri || null;
+            })
+            .filter((value): value is string => Boolean(value))
+            .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+    if (!images.length) throw new ImageRequestError("Gemini 接口没有返回图片", payload);
+    return images;
+}
+
+function parseGeminiTextPayload(payload: GeminiPayload) {
+    validateGeminiPayload(payload);
+    return payload.candidates
+        ?.flatMap((candidate) => candidate.content?.parts || [])
+        .map((part) => part.text || "")
+        .join("") || "";
+}
+
+function consumeGeminiTextStreamBlock(block: string, state: GeminiTextStreamState, onDelta?: (text: string) => void) {
+    const data = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).replace(/^ /, ""))
+        .join("\n")
+        .trim();
+    if (!data || data === "[DONE]") return;
+    try {
+        const text = parseGeminiTextPayload(JSON.parse(data) as GeminiPayload);
+        if (text) {
+            state.text += text;
+            onDelta?.(state.text);
+        }
+    } catch (error) {
+        state.error = error instanceof Error ? error.message : "Gemini 流式响应解析失败";
+    }
+}
+
+function consumeGeminiTextStream(state: GeminiTextStreamState, text: string, onDelta?: (value: string) => void, flush = false) {
+    state.buffer += text;
+    for (;;) {
+        const match = state.buffer.match(/\r?\n\r?\n/);
+        if (!match) break;
+        const index = match.index ?? 0;
+        consumeGeminiTextStreamBlock(state.buffer.slice(0, index), state, onDelta);
+        state.buffer = state.buffer.slice(index + match[0].length);
+    }
+    if (flush && state.buffer.trim()) {
+        consumeGeminiTextStreamBlock(state.buffer, state, onDelta);
+        state.buffer = "";
+    }
+}
+
+async function requestGeminiImages(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams): Promise<GeneratedImage[]> {
+    const requests = Array.from({ length: params.n }, () => requestGeminiImagesOnce(config, prompt, references, params));
+    return (await Promise.all(requests)).flat();
+}
+
+async function requestGeminiImagesOnce(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams): Promise<GeneratedImage[]> {
+    const systemPrompt = (config.systemPrompts.image || config.systemPrompt).trim();
+    const finalPrompt = withPromptGuard(config, prompt);
+    const parts: GeminiPart[] = [{ text: finalPrompt }];
+    for (const image of references) {
+        parts.push(toGeminiImagePart(await imageToDataUrl(image)));
+    }
+    const body = {
+        ...(systemPrompt ? { systemInstruction: { parts: [{ text: systemPrompt }] } } : {}),
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...resolveGeminiImageConfig(config) },
+        contents: [{ role: "user", parts }],
+    };
+
+    return requestAndParseImages(
+        config,
+        "/gemini/generateContent",
+        body,
+        params.timeoutSeconds,
+        () =>
+            fetchGeminiEndpoint(config, "generateContent", params.timeoutSeconds, {
+                method: "POST",
+                headers: geminiHeaders(config),
+                body: JSON.stringify(body),
+            }),
+        async (response) => {
+            const payload = (await response.json()) as GeminiPayload;
+            const images = parseGeminiImagePayload(payload);
+            return { images, responseBody: stringifyLogPayload(payload) };
+        },
+    );
+}
+
+async function requestGeminiQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
+    const timeoutSeconds = normalizeBoundedInteger(config.timeout, 600, 1, 3600);
+    const body = toGeminiBody(config, messages);
+    const response = await fetchGeminiEndpoint(
+        config,
+        "streamGenerateContent",
+        timeoutSeconds,
+        {
+            method: "POST",
+            headers: geminiHeaders(config),
+            body: JSON.stringify(body),
+        },
+        "?alt=sse",
+    );
+    if (!response.ok) {
+        const error = await fetchErrorDetail(response, "请求失败");
+        throw new ImageRequestError(error.message, error.detail);
+    }
+    if (!response.body) {
+        const payload = (await response.json()) as GeminiPayload;
+        const answer = parseGeminiTextPayload(payload) || "没有返回内容";
+        onDelta(answer);
+        return answer;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const state: GeminiTextStreamState = { buffer: "", text: "" };
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        consumeGeminiTextStream(state, decoder.decode(value, { stream: true }), onDelta);
+        if (state.error) throw new ImageRequestError(state.error);
+    }
+    consumeGeminiTextStream(state, decoder.decode(), onDelta, true);
+    if (state.error) throw new ImageRequestError(state.error);
+    const answer = state.text || "没有返回内容";
+    if (!state.text) onDelta(answer);
+    return answer;
+}
+
 async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, params: ImageRequestParams): Promise<GeneratedImage[]> {
     const mime = MIME_MAP[params.outputFormat];
 
@@ -468,16 +894,11 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
             body,
             params.timeoutSeconds,
             () =>
-                requestWithTransientRetry(() =>
-                    withTimeout(params.timeoutSeconds, (signal) =>
-                        fetch(aiApiUrl(config, "/images/generations"), {
-                            method: "POST",
-                            headers: aiHeaders(config, "application/json"),
-                            body: JSON.stringify(body),
-                            signal,
-                        }),
-                    ),
-                ),
+                fetchOpenAIEndpoint(config, "/images/generations", params.timeoutSeconds, {
+                    method: "POST",
+                    headers: aiHeaders(config, "application/json"),
+                    body: JSON.stringify(body),
+                }),
             async (response) => {
                 if (config.streamImages && isEventStreamResponse(response)) {
                     const images = await parseImagesStreamResponse(response, mime);
@@ -512,16 +933,11 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
         body,
         params.timeoutSeconds,
         () =>
-            requestWithTransientRetry(() =>
-                withTimeout(params.timeoutSeconds, (signal) =>
-                    fetch(aiApiUrl(config, "/images/generations"), {
-                        method: "POST",
-                        headers: aiHeaders(config, "application/json"),
-                        body: JSON.stringify(body),
-                        signal,
-                    }),
-                ),
-            ),
+            fetchOpenAIEndpoint(config, "/images/generations", params.timeoutSeconds, {
+                method: "POST",
+                headers: aiHeaders(config, "application/json"),
+                body: JSON.stringify(body),
+            }),
         async (response) => {
             if (config.streamImages && isEventStreamResponse(response)) {
                 const images = await parseImagesStreamResponse(response, mime);
@@ -561,16 +977,11 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
         summarizeFormData(formData),
         params.timeoutSeconds,
         () =>
-            requestWithTransientRetry(() =>
-                withTimeout(params.timeoutSeconds, (signal) =>
-                    fetch(aiApiUrl(config, "/images/edits"), {
-                        method: "POST",
-                        headers: aiHeaders(config),
-                        body: formData,
-                        signal,
-                    }),
-                ),
-            ),
+            fetchOpenAIEndpoint(config, "/images/edits", params.timeoutSeconds, {
+                method: "POST",
+                headers: aiHeaders(config),
+                body: formData,
+            }),
         async (response) => {
             if (config.streamImages && isEventStreamResponse(response)) {
                 const images = await parseImagesStreamResponse(response, mime);
@@ -593,7 +1004,7 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
             void writeLocalAICallLog(config, endpoint, startedAt, response.status, timeoutSeconds, stringifyLogPayload(requestBody), stringifyLogPayload(error.detail || error.message), error.message);
             throw new ImageRequestError(error.message, error.detail);
         }
-        const parsed = await parseResponse(response);
+        const parsed = await parseResponseWithTimeout(response, timeoutSeconds, parseResponse);
         logged = true;
         void writeLocalAICallLog(config, endpoint, startedAt, response.status, timeoutSeconds, stringifyLogPayload(requestBody), parsed.responseBody, "");
         return parsed.images;
@@ -608,6 +1019,10 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
 async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], options: ImageEditOptions = {}): Promise<GeneratedImage[]> {
     const imageConfig = { ...config, apiMode: "images" as const };
     const params = createImageRequestParams(config);
+    if (activeApiFormat(imageConfig) === "gemini") {
+        if (options.maskDataUrl) throw new ImageRequestError("Gemini 调用格式暂不支持蒙版局部重绘");
+        return requestGeminiImages(imageConfig, prompt, references, params);
+    }
     const useConcurrentSingleRequests = config.codexCli || config.streamImages;
     if (params.n > 1 && useConcurrentSingleRequests) {
         const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...imageConfig, count: "1" }, prompt, references, options)));
@@ -645,13 +1060,27 @@ export async function requestEdit(config: AiConfig & { seedIndex?: number; seedC
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
+    if (activeApiFormat(config) === "gemini") {
+        try {
+            const answer = await requestGeminiQuestion(config, messages, onDelta);
+            refreshRemoteUser(config);
+            return answer;
+        } catch (error) {
+            if (error instanceof ImageRequestError) throw new Error(error.message);
+            throw new Error(error instanceof Error ? error.message : "请求失败");
+        }
+    }
+
     let buffer = "";
     let answer = "";
     let processedLength = 0;
 
     try {
-        const response = await axios.post(
+        const timeoutMs = normalizeBoundedInteger(config.timeout, 600, 1, 3600) * 1000;
+        const response = await axiosPostWithLocalProxyFallback<string | Record<string, unknown>>(
+            config,
             aiApiUrl(config, "/chat/completions"),
+            config.channelMode === "local" ? localProxyOpenAIUrl(config, "/chat/completions") : "",
             {
                 model: config.model,
                 messages: withSystemMessage(config, messages),
@@ -662,7 +1091,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
                     ...aiHeaders(config, "application/json"),
                 } as Record<string, string>,
                 responseType: "text",
-                timeout: normalizeBoundedInteger(config.timeout, 600, 1, 3600) * 1000,
+                timeout: timeoutMs,
                 onDownloadProgress: (event) => {
                     const responseText = String(event.event?.target?.responseText || "");
                     const nextText = responseText.slice(processedLength);
@@ -710,9 +1139,20 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
 export async function fetchImageModels(config: AiConfig) {
     if (config.channelMode === "remote") return config.models;
     try {
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
+        if (activeApiFormat(config) === "gemini") {
+            const response = await axiosGetWithLocalProxyFallback<GeminiPayload>(config, geminiApiUrl(config), config.channelMode === "local" ? localProxyGeminiApiUrl(config) : "", {
+                headers: geminiHeaders(config),
+                timeout: normalizeBoundedInteger(config.timeout, 600, 1, 3600) * 1000,
+            });
+            validateGeminiPayload(response.data);
+            return (response.data.models || [])
+                .map((model) => model.name?.replace(/^models\//, ""))
+                .filter((id): id is string => Boolean(id))
+                .sort((a, b) => a.localeCompare(b));
+        }
+        const response = await axiosGetWithLocalProxyFallback<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(config, buildApiUrl(activeLocalBaseUrl(config), "/models"), config.channelMode === "local" ? localProxyOpenAIUrl(config, "/models") : "", {
             headers: {
-                Authorization: `Bearer ${config.apiKey}`,
+                Authorization: `Bearer ${activeLocalApiKey(config)}`,
             },
             timeout: normalizeBoundedInteger(config.timeout, 600, 1, 3600) * 1000,
         });
@@ -810,16 +1250,11 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
         body,
         params.timeoutSeconds,
         () =>
-            requestWithTransientRetry(() =>
-                withTimeout(params.timeoutSeconds, (signal) =>
-                    fetch(aiApiUrl(config, "/images/generations"), {
-                        method: "POST",
-                        headers: aiHeaders(config, "application/json"),
-                        body: JSON.stringify(body),
-                        signal,
-                    }),
-                ),
-            ),
+            fetchOpenAIEndpoint(config, "/images/generations", params.timeoutSeconds, {
+                method: "POST",
+                headers: aiHeaders(config, "application/json"),
+                body: JSON.stringify(body),
+            }),
         async (response) => {
             if (config.streamImages && isEventStreamResponse(response)) {
                 const images = await parseImagesStreamResponse(response, mime);
