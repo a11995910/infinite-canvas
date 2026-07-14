@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { proxyRequestHeaders, proxyResponseHeaders, verifySub2APIProxyTarget } from "@/lib/sub2api-server";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 900;
 
 type RouteContext = {
     params: Promise<{ target: string; expires: string; signature: string; path: string[] }>;

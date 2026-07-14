@@ -1,5 +1,6 @@
 # 待测试
 
+- Sub2API 嵌入生图代理允许请求运行到 900 秒；生产环境 Canvas 域名的 Nginx `proxy_read_timeout` 和 `proxy_send_timeout` 也必须至少为 900 秒，避免上游实际生图成功但站点在默认 60 秒先返回 `504`。前端收到 HTML 格式的 `504` 时会提示站点网关超时及不要立即重复提交，不再误报为 Base URL 错误。
 - 生图工作台：OpenAI 兼容渠道会把站点根地址、`/v1` 地址、`llms.txt` / `llms-full.txt` 文档地址以及误填的 `/v1/models`、`/v1/images/generations`、`/v1/images/edits` 完整接口地址统一归一化为正确 Base URL；需分别使用 `https://api.skylee9.cloudns.ch`、`https://api.skylee9.cloudns.ch/v1` 和 `https://api.skylee9.cloudns.ch/llms.txt` 拉取模型，并用 `gpt-image-2` 验证文生图和图生图。
 - 生图工作台：多张参考图允许部分上传成功并显示失败数量，上传期间禁止提交生成；新建会话会清理未被任务或历史记录引用的临时参考图。图片已经生成但本地/服务端持久化或生成记录写入失败时会保留当前结果卡片，便于用户立即下载；保存到素材时使用对应生成任务的提示词，不受当前输入框内容影响。
 - 生图历史同步：启用账号数据同步后，登录会按记录 ID 合并远端和浏览器本地历史及分类，再把合并结果同步到账号，避免覆盖尚未上传的本地生成记录。

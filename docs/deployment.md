@@ -274,7 +274,7 @@ SUB2API_EMBED_ALLOWED_ORIGINS=https://fast.youkeduo.site,http://192.220.24.46:80
 SUB2API_EMBED_ALLOW_PRIVATE_HOSTS=false
 ```
 
-当前线上存在两个画布入口：`canvas.youkeduo.shop` 指向新 VPS，`canvas.youkeduo.xyz` 仍可能指向老 VPS。只要两个入口还同时可用，两台服务器的 `.env` 都要保持相同的 `SUB2API_EMBED_ALLOWED_ORIGINS`，否则用户从不同域名进入时会出现“当前 Sub2API 来源不在允许列表中”。
+当前线上画布入口 `canvas.youkeduo.shop` 和 `canvas.youkeduo.xyz` 均转发到 `207.57.145.15` 的画布容器。两个入口都要使用相同的 `SUB2API_EMBED_ALLOWED_ORIGINS`，否则用户从不同域名进入时会出现“当前 Sub2API 来源不在允许列表中”。
 
 更新服务器 `.env` 后需要重建应用容器让环境变量进入运行时：
 
@@ -300,6 +300,7 @@ docker compose up -d app
 - 1Panel 表单左侧已经选择了 `http` 时，右侧地址只填 `127.0.0.1:13000`，不要再填写 `http://127.0.0.1:13000`。
 - 如果填写成 `http://115.190.90.61:13000`，OpenResty 可能生成 `invalid port in upstream`，站点会创建失败。
 - 反向代理只代理到前端 `13000`，不要代理到后端 `18080`。后端由 Next.js 通过 `/api/*` 内部转发。
+- 生图和视频请求可能超过 Nginx 默认 60 秒，Canvas 域名的代理配置必须设置 `proxy_read_timeout 900s;` 和 `proxy_send_timeout 900s;`。否则 Sub2API 上游可能已经生成成功并计费，但浏览器会先收到 `504`，无法取得最终结果。
 
 服务器上可以用下面命令确认容器和端口是否正常：
 

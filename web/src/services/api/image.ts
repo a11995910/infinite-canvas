@@ -239,7 +239,10 @@ async function fetchErrorDetail(response: Response, fallback: string) {
         if (!text.trim()) return { message: `${fallback}：${response.status}`, detail: `${response.status} ${response.statusText}` };
         if (isHtmlErrorResponse(response.headers.get("Content-Type") || "", text)) {
             return {
-                message: "上游返回了网页错误页面，请检查 Base URL 是否填写为接口根地址。",
+                message:
+                    response.status === 504
+                        ? "生图请求在站点网关等待超时（504），上游可能仍在处理中，请勿立即重复提交。"
+                        : "上游返回了网页错误页面，请检查 Base URL 是否填写为接口根地址。",
                 detail: truncateErrorText(text.trim(), MAX_ERROR_DETAIL_LENGTH),
             };
         }
