@@ -2,7 +2,7 @@ import axios, { type AxiosRequestConfig, type AxiosResponse } from "axios";
 
 import { dataUrlToFile } from "@/lib/image-utils";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
-import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, normalizeApiFormat, type AiConfig, type ApiCallFormat } from "@/stores/use-config-store";
+import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, normalizeApiFormat, normalizeOpenAIBaseUrl, type AiConfig, type ApiCallFormat } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import { nanoid } from "nanoid";
@@ -436,10 +436,8 @@ function localProxyUrlFromPath(path: string) {
     return `/api/local-ai-proxy/${encodedPath}`;
 }
 
-function localProxyOpenAIUrl(config: AiConfig, path: string) {
-    const lowerBaseUrl = activeLocalBaseUrl(config).trim().replace(/\/+$/, "").toLowerCase();
-    const proxyPath = lowerBaseUrl.endsWith("/v1") ? path : `/v1${path}`;
-    return localProxyUrlFromPath(proxyPath);
+function localProxyOpenAIUrl(path: string) {
+    return localProxyUrlFromPath(path);
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {
@@ -502,12 +500,12 @@ function geminiHeaders(config: AiConfig) {
 
 function headersWithLocalProxyBase(config: AiConfig, headers: HeadersInit | undefined) {
     const nextHeaders = new Headers(headers);
-    nextHeaders.set(LOCAL_AI_PROXY_BASE_HEADER, activeLocalBaseUrl(config));
+    nextHeaders.set(LOCAL_AI_PROXY_BASE_HEADER, activeApiFormat(config) === "openai" ? normalizeOpenAIBaseUrl(activeLocalBaseUrl(config)) : activeLocalBaseUrl(config));
     return nextHeaders;
 }
 
 function axiosHeadersWithLocalProxyBase(config: AiConfig, headers: Record<string, string>) {
-    return { ...headers, [LOCAL_AI_PROXY_BASE_HEADER]: activeLocalBaseUrl(config) };
+    return { ...headers, [LOCAL_AI_PROXY_BASE_HEADER]: activeApiFormat(config) === "openai" ? normalizeOpenAIBaseUrl(activeLocalBaseUrl(config)) : activeLocalBaseUrl(config) };
 }
 
 function isNetworkRequestError(error: unknown) {
@@ -535,7 +533,7 @@ async function fetchWithLocalProxyFallback(config: AiConfig, directUrl: string, 
 }
 
 function fetchOpenAIEndpoint(config: AiConfig, path: string, timeoutSeconds: number, init: RequestInit) {
-    return fetchWithLocalProxyFallback(config, aiApiUrl(config, path), config.channelMode === "local" ? localProxyOpenAIUrl(config, path) : "", timeoutSeconds, init);
+    return fetchWithLocalProxyFallback(config, aiApiUrl(config, path), config.channelMode === "local" ? localProxyOpenAIUrl(path) : "", timeoutSeconds, init);
 }
 
 function fetchGeminiEndpoint(config: AiConfig, action: "generateContent" | "streamGenerateContent", timeoutSeconds: number, init: RequestInit, query = "") {
@@ -608,7 +606,7 @@ function redactLogImages(value: unknown) {
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
         const item = record[key];
-        if (typeof item === "string" && (item.startsWith("data:image/") || item.length > 2048 && looksLikeBase64(item))) {
+        if (typeof item === "string" && (item.startsWith("data:image/") || (item.length > 2048 && looksLikeBase64(item)))) {
             record[key] = `[redacted image/string len=${item.length}]`;
             continue;
         }
@@ -652,12 +650,7 @@ function validateGeminiPayload(payload: GeminiPayload) {
 }
 
 function toGeminiBody(config: AiConfig, messages: ChatCompletionMessage[], extra?: Record<string, unknown>) {
-    const systemText = [
-        (config.systemPrompts.text || config.systemPrompt).trim(),
-        ...messages.flatMap((message) => (message.role === "system" ? [geminiTextContent(message.content)] : [])),
-    ]
-        .filter(Boolean)
-        .join("\n\n");
+    const systemText = [(config.systemPrompts.text || config.systemPrompt).trim(), ...messages.flatMap((message) => (message.role === "system" ? [geminiTextContent(message.content)] : []))].filter(Boolean).join("\n\n");
     const contents = toGeminiContents(messages.filter((message) => message.role !== "system"));
     return {
         contents,
@@ -755,10 +748,12 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
 
 function parseGeminiTextPayload(payload: GeminiPayload) {
     validateGeminiPayload(payload);
-    return payload.candidates
-        ?.flatMap((candidate) => candidate.content?.parts || [])
-        .map((part) => part.text || "")
-        .join("") || "";
+    return (
+        payload.candidates
+            ?.flatMap((candidate) => candidate.content?.parts || [])
+            .map((part) => part.text || "")
+            .join("") || ""
+    );
 }
 
 function consumeGeminiTextStreamBlock(block: string, state: GeminiTextStreamState, onDelta?: (text: string) => void) {
@@ -1080,7 +1075,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
         const response = await axiosPostWithLocalProxyFallback<string | Record<string, unknown>>(
             config,
             aiApiUrl(config, "/chat/completions"),
-            config.channelMode === "local" ? localProxyOpenAIUrl(config, "/chat/completions") : "",
+            config.channelMode === "local" ? localProxyOpenAIUrl("/chat/completions") : "",
             {
                 model: config.model,
                 messages: withSystemMessage(config, messages),
@@ -1150,12 +1145,17 @@ export async function fetchImageModels(config: AiConfig) {
                 .filter((id): id is string => Boolean(id))
                 .sort((a, b) => a.localeCompare(b));
         }
-        const response = await axiosGetWithLocalProxyFallback<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(config, buildApiUrl(activeLocalBaseUrl(config), "/models"), config.channelMode === "local" ? localProxyOpenAIUrl(config, "/models") : "", {
-            headers: {
-                Authorization: `Bearer ${activeLocalApiKey(config)}`,
+        const response = await axiosGetWithLocalProxyFallback<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(
+            config,
+            buildApiUrl(activeLocalBaseUrl(config), "/models"),
+            config.channelMode === "local" ? localProxyOpenAIUrl("/models") : "",
+            {
+                headers: {
+                    Authorization: `Bearer ${activeLocalApiKey(config)}`,
+                },
+                timeout: normalizeBoundedInteger(config.timeout, 600, 1, 3600) * 1000,
             },
-            timeout: normalizeBoundedInteger(config.timeout, 600, 1, 3600) * 1000,
-        });
+        );
         return (response.data.data || [])
             .map((model) => model.id)
             .filter((id): id is string => Boolean(id))
@@ -1186,7 +1186,7 @@ function generateDiscreteSeed(seedIndex?: number, seedCount?: number, customSeed
         randVal = array[0];
     } else {
         // 降级使用微秒级时空杂凑
-        const timeSalt = Date.now() * 1000 + Math.floor(performance.now() * 1000) % 1000;
+        const timeSalt = Date.now() * 1000 + (Math.floor(performance.now() * 1000) % 1000);
         const mathRand = Math.random() * 1000000;
         randVal = timeSalt ^ mathRand;
     }
@@ -1229,7 +1229,7 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
                 if (publicUrl) return publicUrl;
             }
             return imageToDataUrl(ref);
-        })
+        }),
     );
 
     const seedValue = generateDiscreteSeed(config.seedIndex, config.seedCount, config.seed);

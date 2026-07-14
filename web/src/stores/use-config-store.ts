@@ -165,7 +165,14 @@ export function normalizeLocalChannels(config: Partial<AiConfig>) {
         models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
     }));
     if (!normalized.length) {
-        normalized.push({ id: "local-default", name: "本地直连", baseUrl: config.baseUrl || defaultConfig.baseUrl, apiKey: config.apiKey || "", apiFormat: normalizeApiFormat(config.apiFormat), models: Array.isArray(config.models) ? config.models.filter(Boolean) : [] });
+        normalized.push({
+            id: "local-default",
+            name: "本地直连",
+            baseUrl: config.baseUrl || defaultConfig.baseUrl,
+            apiKey: config.apiKey || "",
+            apiFormat: normalizeApiFormat(config.apiFormat),
+            models: Array.isArray(config.models) ? config.models.filter(Boolean) : [],
+        });
     }
     return normalized;
 }
@@ -261,10 +268,27 @@ export function useEffectiveConfig() {
     return useMemo(() => resolveEffectiveConfig(config, modelChannel), [config, modelChannel]);
 }
 
+/** 将站点、文档或完整接口地址归一化为可直接拼接请求路径的 OpenAI Base URL。 */
+export function normalizeOpenAIBaseUrl(baseUrl: string) {
+    let normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+    try {
+        const url = new URL(normalizedBaseUrl);
+        let pathname = url.pathname.replace(/\/+$/, "");
+        pathname = pathname.replace(/\/llms(?:-full)?\.txt$/i, "");
+        const endpointMatch = pathname.match(/^(.*\/v1)\/(?:models(?:\/.*)?|images(?:\/.*)?|chat\/completions|responses|videos(?:\/.*)?|embeddings|media\/uploads\/presign)$/i);
+        if (endpointMatch) pathname = endpointMatch[1];
+        url.pathname = pathname || "/";
+        url.search = "";
+        url.hash = "";
+        normalizedBaseUrl = url.toString().replace(/\/+$/, "");
+    } catch {
+        // 输入校验由实际请求统一处理；这里只处理可解析的绝对 URL。
+    }
+    return normalizedBaseUrl.toLowerCase().endsWith("/v1") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
+}
+
 export function buildApiUrl(baseUrl: string, path: string) {
-    const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
-    const apiBaseUrl = normalizedBaseUrl.endsWith("/v1") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
-    return `${apiBaseUrl}${path}`;
+    return `${normalizeOpenAIBaseUrl(baseUrl)}${path}`;
 }
 
 export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
@@ -320,18 +344,12 @@ export function resolveModelSelectionForRole(config: AiConfig, role: AiModelRole
 
 function firstModelInChannel(config: AiConfig, channelId: string) {
     if (!channelId) return "";
-    const channels =
-        config.channelMode === "remote"
-            ? config.publicChannels.map((channel) => ({ id: channel.id, models: channel.models }))
-            : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
+    const channels = config.channelMode === "remote" ? config.publicChannels.map((channel) => ({ id: channel.id, models: channel.models })) : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
     return channels.find((channel) => channel.id === channelId)?.models[0] || "";
 }
 
 function isModelAllowedInChannel(config: AiConfig, model: string, channelId: string) {
-    const channels =
-        config.channelMode === "remote"
-            ? config.publicChannels.map((channel) => ({ id: channel.id, models: channel.models }))
-            : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
+    const channels = config.channelMode === "remote" ? config.publicChannels.map((channel) => ({ id: channel.id, models: channel.models })) : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
     if (!channelId) return !config.models.length || config.models.includes(model);
     const channel = channels.find((item) => item.id === channelId);
     if (!channel) return false;

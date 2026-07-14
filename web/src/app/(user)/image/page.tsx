@@ -34,12 +34,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
-import {
-    CreativeWorkflowWorkspace,
-    type WorkflowExternalTaskFailure,
-    type WorkflowExternalTaskStart,
-    type WorkflowExternalTaskSuccess,
-} from "@/components/workflows/creative-workflow-workspace";
+import { CreativeWorkflowWorkspace, type WorkflowExternalTaskFailure, type WorkflowExternalTaskStart, type WorkflowExternalTaskSuccess } from "@/components/workflows/creative-workflow-workspace";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
@@ -160,7 +155,7 @@ export default function ImagePage() {
     const saveLogChainRef = useRef<Promise<void>>(Promise.resolve());
 
     const model = effectiveConfig.imageModel || effectiveConfig.model;
-    const canGenerate = Boolean(prompt.trim());
+    const canGenerate = Boolean(prompt.trim()) && uploadingCount === 0;
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
     const pendingCount = results.filter((item) => item.status === "pending").length;
 
@@ -239,7 +234,7 @@ export default function ImagePage() {
         const dx = event.clientX - drag.startX;
         const dy = event.clientY - drag.startY;
         if (Math.abs(dx) > 4 || Math.abs(dy) > 4) drag.moved = true;
-        
+
         // 直接更新 DOM 样式，免去顶层 React State 的庞大整页重绘 Layout 卡顿！
         const nextPos = clampWorkflowButtonPosition({ x: drag.originX + dx, y: drag.originY + dy });
         if (workflowButtonRef.current) {
@@ -265,22 +260,27 @@ export default function ImagePage() {
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
         if (!imageFiles.length) return;
-        setUploadingCount(imageFiles.length);
+        setUploadingCount((value) => value + imageFiles.length);
         const hideLoading = message.loading("正在上传参考图...", 0);
         try {
-            const nextReferences = await Promise.all(
+            const uploaded = await Promise.allSettled(
                 imageFiles.map(async (file) => {
                     const image = await uploadImage(file);
                     return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey, source: "upload" as const, temporary: true };
                 }),
             );
-            setReferences((value) => [...value, ...nextReferences]);
-            message.success("参考图上传成功");
-        } catch (error) {
-            message.error(error instanceof Error ? `上传参考图失败：${error.message}` : "上传参考图失败");
+            const nextReferences = uploaded.flatMap((item) => (item.status === "fulfilled" ? [item.value] : []));
+            const failed = uploaded.filter((item): item is PromiseRejectedResult => item.status === "rejected");
+            if (nextReferences.length) setReferences((value) => [...value, ...nextReferences]);
+            if (failed.length) {
+                const reason = failed[0].reason instanceof Error ? failed[0].reason.message : "上传失败";
+                message.warning(`已上传 ${nextReferences.length} 张，失败 ${failed.length} 张：${reason}`);
+            } else {
+                message.success("参考图上传成功");
+            }
         } finally {
             hideLoading();
-            setUploadingCount(0);
+            setUploadingCount((value) => Math.max(0, value - imageFiles.length));
         }
     };
 
@@ -292,24 +292,26 @@ export default function ImagePage() {
                 message.error("剪切板里没有可读取的图片");
                 return;
             }
-            setUploadingCount(blobs.length);
+            setUploadingCount((value) => value + blobs.length);
             const hideLoading = message.loading("正在上传并读取参考图...", 0);
             try {
-                const nextReferences = await Promise.all(
+                const uploaded = await Promise.allSettled(
                     blobs.map(async (blob, index) => {
                         const image = await uploadImage(blob);
                         return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey, source: "clipboard" as const, temporary: true };
                     }),
                 );
-                setReferences((value) => [...value, ...nextReferences]);
-                message.success(`已成功上传并读取 ${nextReferences.length} 张参考图`);
+                const nextReferences = uploaded.flatMap((item) => (item.status === "fulfilled" ? [item.value] : []));
+                const failed = uploaded.length - nextReferences.length;
+                if (nextReferences.length) setReferences((value) => [...value, ...nextReferences]);
+                if (failed) message.warning(`已读取 ${nextReferences.length} 张，失败 ${failed} 张`);
+                else message.success(`已成功上传并读取 ${nextReferences.length} 张参考图`);
             } finally {
                 hideLoading();
-                setUploadingCount(0);
+                setUploadingCount((value) => Math.max(0, value - blobs.length));
             }
         } catch {
             message.error("剪切板里没有可读取的图片");
-            setUploadingCount(0);
         }
     };
 
@@ -373,6 +375,7 @@ export default function ImagePage() {
 
         const tasks = taskIds.map(async (id, index) => {
             const taskStartedAt = performance.now();
+            let keepResult = false;
             try {
                 const image = await runGenerationTask(id, {
                     ...snapshot,
@@ -388,62 +391,80 @@ export default function ImagePage() {
                 }
 
                 // 立即存储图片
-                const stored = await uploadImage(image.dataUrl);
-                const durableImage = { 
-                    ...image, 
-                    storageKey: stored.storageKey, 
-                    width: stored.width, 
-                    height: stored.height, 
-                    bytes: stored.bytes, 
-                    mimeType: stored.mimeType 
+                let stored: Awaited<ReturnType<typeof uploadImage>>;
+                try {
+                    stored = await uploadImage(image.dataUrl);
+                } catch (error) {
+                    keepResult = true;
+                    message.warning(`图片已生成，但保存失败，请先下载结果：${errorMessage(error)}`);
+                    return;
+                }
+                const durableImage = {
+                    ...image,
+                    storageKey: stored.storageKey,
+                    width: stored.width,
+                    height: stored.height,
+                    bytes: stored.bytes,
+                    mimeType: stored.mimeType,
                 };
-                
+
                 // 更新结果状态
                 setResults((value) => updateResult(value, id, { image: durableImage }));
-                
+
                 // 立即保存单张成功日志
-                await saveLog(
-                    buildLog({
-                        prompt: snapshot.text,
-                        model: snapshot.displayConfig.imageModel || snapshot.displayConfig.model,
-                        config: { ...snapshot.displayConfig, count: "1" },
-                        references: snapshot.references,
-                        durationMs: performance.now() - taskStartedAt,
-                        successCount: 1,
-                        failCount: 0,
-                        status: "成功",
-                        images: [durableImage],
-                        errors: [],
-                        errorDetails: [],
-                        categoryIds: activeResultCategoryId ? [activeResultCategoryId] : [],
-                    }),
-                );
+                try {
+                    await saveLog(
+                        buildLog({
+                            prompt: snapshot.text,
+                            model: snapshot.displayConfig.imageModel || snapshot.displayConfig.model,
+                            config: { ...snapshot.displayConfig, count: "1" },
+                            references: snapshot.references,
+                            durationMs: performance.now() - taskStartedAt,
+                            successCount: 1,
+                            failCount: 0,
+                            status: "成功",
+                            images: [durableImage],
+                            errors: [],
+                            errorDetails: [],
+                            categoryIds: activeResultCategoryId ? [activeResultCategoryId] : [],
+                        }),
+                    );
+                } catch (error) {
+                    keepResult = true;
+                    message.warning(`图片已保存，但生成记录写入失败：${errorMessage(error)}`);
+                    return;
+                }
                 message.success("图片已生成");
             } catch (err) {
                 const errMsg = errorMessage(err);
                 const errDetail = errorDetail(err);
-                
+
                 // 立即保存单张失败日志
-                await saveLog(
-                    buildLog({
-                        prompt: snapshot.text,
-                        model: snapshot.displayConfig.imageModel || snapshot.displayConfig.model,
-                        config: { ...snapshot.displayConfig, count: "1" },
-                        references: snapshot.references,
-                        durationMs: performance.now() - taskStartedAt,
-                        successCount: 0,
-                        failCount: 1,
-                        status: "失败",
-                        images: [],
-                        errors: [errMsg],
-                        errorDetails: [errDetail],
-                        categoryIds: activeResultCategoryId ? [activeResultCategoryId] : [],
-                    }),
-                );
+                try {
+                    await saveLog(
+                        buildLog({
+                            prompt: snapshot.text,
+                            model: snapshot.displayConfig.imageModel || snapshot.displayConfig.model,
+                            config: { ...snapshot.displayConfig, count: "1" },
+                            references: snapshot.references,
+                            durationMs: performance.now() - taskStartedAt,
+                            successCount: 0,
+                            failCount: 1,
+                            status: "失败",
+                            images: [],
+                            errors: [errMsg],
+                            errorDetails: [errDetail],
+                            categoryIds: activeResultCategoryId ? [activeResultCategoryId] : [],
+                        }),
+                    );
+                } catch (error) {
+                    keepResult = true;
+                    message.warning(`失败记录写入失败，当前错误卡片已保留：${errorMessage(error)}`);
+                }
                 message.error(errMsg || "生成失败");
             } finally {
                 // 任务完成，从进行中状态移除
-                setResults((value) => value.filter((item) => item.id !== id));
+                if (!keepResult) setResults((value) => value.filter((item) => item.id !== id));
             }
         });
 
@@ -478,6 +499,7 @@ export default function ImagePage() {
     };
 
     const saveResultToAssets = async (image: GeneratedImage, index: number) => {
+        const sourcePrompt = results.find((item) => item.image?.id === image.id)?.prompt || logs.find((log) => log.images.some((item) => item.id === image.id))?.prompt || prompt;
         const stored = image.storageKey
             ? {
                   url: await resolveImageUrl(image.storageKey, image.dataUrl),
@@ -495,7 +517,7 @@ export default function ImagePage() {
             tags: [],
             source: "生图工作台",
             data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
-            metadata: { source: "image-page", prompt },
+            metadata: { source: "image-page", prompt: sourcePrompt },
         });
         message.success("已加入我的素材");
     };
@@ -527,7 +549,10 @@ export default function ImagePage() {
                 setReferences((value) => [...value, reference]);
             } else {
                 const stored = await uploadImage(payload.dataUrl);
-                setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, source: payload.source === "library" ? "library" : "upload", temporary: payload.source !== "library" }]);
+                setReferences((value) => [
+                    ...value,
+                    { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, source: payload.source === "library" ? "library" : "upload", temporary: payload.source !== "library" },
+                ]);
             }
         } else {
             message.warning("视频素材不能作为生图参考图");
@@ -536,6 +561,11 @@ export default function ImagePage() {
     };
 
     const createSession = () => {
+        const disposableKeys = references
+            .filter((item) => shouldDeleteReferenceFile(item, logs, results))
+            .map((item) => item.storageKey)
+            .filter((key): key is string => Boolean(key));
+        if (disposableKeys.length) void deleteStoredImages(disposableKeys).catch((error) => message.error(error instanceof Error ? error.message : "临时参考图清理失败"));
         setPrompt("");
         setReferences([]);
         setResults((value) => value.filter((item) => item.status === "pending"));
@@ -611,17 +641,19 @@ export default function ImagePage() {
             const remote = config.imageHistory as { logs?: GenerationLog[]; categories?: GenerationCategory[] } | undefined;
             const remoteLogs = Array.isArray(remote?.logs) ? remote.logs : [];
             const remoteCategories = Array.isArray(remote?.categories) ? remote.categories : [];
-            
+
             const localLogs = await readStoredLogs();
             const localCategories = await readStoredCategories();
             const localHasData = localLogs.length > 0 || localCategories.length > 0;
             const remoteHasData = remoteLogs.length > 0 || remoteCategories.length > 0;
 
             if (accountHistorySyncEnabledRef.current) {
-                const remoteNormalized = await Promise.all(remoteLogs.map(normalizeLog));
-                await replaceStoredImageHistory(remoteNormalized, remoteCategories);
-                setLogs(remoteNormalized);
-                setCategories(remoteCategories);
+                const mergedLogs = await mergeGenerationLogs(remoteLogs, localLogs);
+                const mergedCategories = mergeGenerationCategories(remoteCategories, localCategories);
+                await replaceStoredImageHistory(mergedLogs, mergedCategories);
+                setLogs(mergedLogs);
+                setCategories(mergedCategories);
+                if (localHasData || remoteLogs.some(hasInlineImageData)) await syncUserImageHistory(currentToken, imageHistorySnapshot(mergedLogs, mergedCategories));
                 return;
             } else if (remoteHasData && !localHasData) {
                 const remoteNormalized = await Promise.all(remoteLogs.map(normalizeLog));
@@ -730,6 +762,10 @@ export default function ImagePage() {
     };
 
     const buildRequestSnapshot = ({ promptText = prompt, referenceItems = references, taskCount = generationCount }: { promptText?: string; referenceItems?: ReferenceImage[]; taskCount?: number } = {}) => {
+        if (uploadingCount > 0) {
+            message.warning("参考图仍在上传，请等待上传完成后再生成");
+            return null;
+        }
         const text = promptText.trim();
         if (!text) {
             message.error("请输入生图提示词");
@@ -984,7 +1020,7 @@ export default function ImagePage() {
                 className="fixed z-50 inline-flex touch-none select-none items-center gap-2 rounded-full border border-sky-300/70 bg-white/90 px-4 py-3 text-sm font-semibold text-stone-950 shadow-[0_18px_50px_rgba(14,165,233,0.28),0_8px_18px_rgba(0,0,0,0.14)] ring-1 ring-white/70 backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-white hover:shadow-[0_22px_64px_rgba(14,165,233,0.36),0_10px_22px_rgba(0,0,0,0.18)] dark:border-sky-400/40 dark:bg-stone-900/88 dark:text-stone-100 dark:ring-white/10 dark:hover:bg-stone-900"
                 style={{
                     left: (typeof window === "undefined" ? defaultWorkflowButtonPosition() : clampWorkflowButtonPosition(workflowButtonPosition.x || workflowButtonPosition.y ? workflowButtonPosition : defaultWorkflowButtonPosition())).x,
-                    top: (typeof window === "undefined" ? defaultWorkflowButtonPosition() : clampWorkflowButtonPosition(workflowButtonPosition.x || workflowButtonPosition.y ? workflowButtonPosition : defaultWorkflowButtonPosition())).y
+                    top: (typeof window === "undefined" ? defaultWorkflowButtonPosition() : clampWorkflowButtonPosition(workflowButtonPosition.x || workflowButtonPosition.y ? workflowButtonPosition : defaultWorkflowButtonPosition())).y,
                 }}
                 onPointerDown={handleWorkflowButtonPointerDown}
                 onPointerMove={handleWorkflowButtonPointerMove}
@@ -1002,7 +1038,7 @@ export default function ImagePage() {
                 <WandSparkles className="size-4 text-sky-500 dark:text-sky-300" />
                 工作流
             </button>
-            <Drawer title="创作工作流" placement="right" size="min(1120px, 92vw)" open={workflowDrawerOpen}  onClose={() => setWorkflowDrawerOpen(false)} styles={{ body: { padding: 0 } }} destroyOnHidden={false}>
+            <Drawer title="创作工作流" placement="right" size="min(1120px, 92vw)" open={workflowDrawerOpen} onClose={() => setWorkflowDrawerOpen(false)} styles={{ body: { padding: 0 } }} destroyOnHidden={false}>
                 <CreativeWorkflowWorkspace
                     embedded
                     hideTaskList
@@ -1634,7 +1670,17 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
         <div className="space-y-3">
             <SettingSubsection title="模型" summary={model || "未选择模型"} collapsed={modelCollapsed} onToggle={() => setModelCollapsed((value) => !value)}>
                 <div className="space-y-2">
-                    <ModelPicker config={config} value={model} channelId={config.imageChannelId} onChange={(value, channelId) => { updateConfig("imageModel", value); if (channelId) updateConfig("imageChannelId", channelId); }} fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                    <ModelPicker
+                        config={config}
+                        value={model}
+                        channelId={config.imageChannelId}
+                        onChange={(value, channelId) => {
+                            updateConfig("imageModel", value);
+                            if (channelId) updateConfig("imageChannelId", channelId);
+                        }}
+                        fullWidth
+                        onMissingConfig={() => openConfigDialog(false)}
+                    />
                 </div>
             </SettingSubsection>
             <ImageSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-3" maxCount={10} collapsible />
