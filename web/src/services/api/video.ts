@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { isGrokImagineVideo15Model, isGrokImagineVideoConfig, normalizeGrokVideoAspectRatio, normalizeGrokVideoDuration, normalizeGrokVideoResolution } from "@/lib/grok-imagine-video";
+import { isGrokImagineVideo15Model, isGrokImagineVideoConfig, normalizeGrokVideoAspectRatio, normalizeGrokVideoDuration, normalizeGrokVideoResolution, prepareGrokVideoReferenceImage } from "@/lib/grok-imagine-video";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -133,19 +133,24 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
 
 async function createGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
     const modelName = modelOptionName(model);
-    const images = await Promise.all(
+    const isGrokVideo15 = isGrokImagineVideo15Model(modelName);
+    const resolution = normalizeGrokVideoResolution(config.vquality);
+    if (isGrokVideo15 && references.length > 1) {
+        throw new Error("grok-imagine-video-1.5 一次只支持 1 张首帧图，请移除多余参考图");
+    }
+    if (resolution === "1080p" && (!isGrokVideo15 || references.length !== 1)) {
+        throw new Error("1080p 仅支持 grok-imagine-video-1.5 图生视频，请选择该模型并添加 1 张参考图");
+    }
+    const referenceUrls = await Promise.all(
         references.slice(0, 7).map(async (image) => {
             const url = await imageToDataUrl(image);
             if (!url) throw new Error("参考图读取失败，请换一张图片或重新上传");
-            return { url };
+            return url;
         }),
     );
-    const resolution = normalizeGrokVideoResolution(config.vquality);
-    if (isGrokImagineVideo15Model(modelName) && images.length > 1) {
-        throw new Error("grok-imagine-video-1.5 一次只支持 1 张首帧图，请移除多余参考图");
-    }
-    if (resolution === "1080p" && (!isGrokImagineVideo15Model(modelName) || images.length !== 1)) {
-        throw new Error("1080p 仅支持 grok-imagine-video-1.5 图生视频，请选择该模型并添加 1 张参考图");
+    const images: Array<{ url: string }> = [];
+    for (const url of referenceUrls) {
+        images.push({ url: await prepareGrokVideoReferenceImage(url) });
     }
 
     const aspectRatio = normalizeGrokVideoAspectRatio(config.size);
@@ -165,7 +170,7 @@ async function createGrokVideoTask(config: AiConfig, model: string, prompt: stri
         ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
     };
     if (images.length) {
-        if (isGrokImagineVideo15Model(modelName)) {
+        if (isGrokVideo15) {
             payload.image = images[0];
         } else {
             payload.reference_images = images;

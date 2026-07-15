@@ -35,6 +35,7 @@ const youMindNanoBananaProRawBase = "https://raw.githubusercontent.com/YouMind-O
 const davidWuGptImage2RawBase = "https://raw.githubusercontent.com/davidwuw0811-boop/awesome-gpt-image2-prompts/main";
 const cacheTtlMs = 1000 * 60 * 60;
 const promptCacheKey = "third-party-prompts";
+const promptCacheVersion = 2;
 const promptCacheStore = localforage.createInstance({ name: "infinite-canvas", storeName: "prompt_cache" });
 
 const categories: PromptCategory[] = [
@@ -64,8 +65,8 @@ export async function fetchPrompts({ keyword = "", tag = [], category = ALL_PROM
 }
 
 async function getPrompts() {
-    const cached = await promptCacheStore.getItem<{ items?: Prompt[]; fetchedAt?: number }>(promptCacheKey);
-    if (cached?.items?.length && cached.fetchedAt && Date.now() - cached.fetchedAt < cacheTtlMs) return cached.items;
+    const cached = await promptCacheStore.getItem<{ version?: number; items?: Prompt[]; fetchedAt?: number }>(promptCacheKey);
+    if (cached?.version === promptCacheVersion && cached.items?.length && cached.fetchedAt && Date.now() - cached.fetchedAt < cacheTtlMs) return cached.items;
     if (loadingPrompts) return loadingPrompts;
     loadingPrompts = loadPrompts().finally(() => {
         loadingPrompts = null;
@@ -85,7 +86,7 @@ async function loadPrompts() {
         }),
     );
     const items = settled.flat();
-    await promptCacheStore.setItem(promptCacheKey, { items, fetchedAt: Date.now() });
+    await promptCacheStore.setItem(promptCacheKey, { version: promptCacheVersion, items, fetchedAt: Date.now() });
     return items;
 }
 
@@ -107,7 +108,7 @@ async function buildAwesomeGptImagePrompts() {
             const title = firstMatch(block, /^###\s+(.+)$/m).replace(/\[([^\]]+)]\([^)]+\)/g, "$1").trim();
             const prompt = firstMatch(block, /\*\*提示词:\*\*\s*\r?\n\s*```[\w-]*\r?\n(.*?)\r?\n```/s).trim();
             if (!title || !prompt) continue;
-            const images = extractMarkdownImages(awesomeGptImageRawBase, block);
+            const images = extractPromptImages(awesomeGptImageRawBase, block);
             items.push(defaultPrompt(`awesome-gpt-image-${leftPad(items.length + 1)}`, title, prompt, images[0] || "", tags, markdownPreview(images)));
         }
     }
@@ -121,7 +122,7 @@ async function buildAwesomeGpt4oImagePrompts() {
         const title = firstMatch(block, /^###\s+(.+)$/m).trim();
         const prompt = firstMatch(block, /- \*\*提示词文本：\*\*\s*`(.*?)`/s).trim();
         if (!title || !prompt) continue;
-        const images = extractMarkdownImages(awesomeGpt4oImagePromptsBase, block);
+        const images = extractPromptImages(awesomeGpt4oImagePromptsBase, block);
         items.push(defaultPrompt(`awesome-gpt4o-image-prompts-${leftPad(items.length + 1)}`, title, prompt, images[0] || "", ["gpt4o"], markdownPreview(images)));
     }
     return items;
@@ -134,7 +135,7 @@ async function buildYouMindPrompts(baseUrl: string, idPrefix: string, modelTag: 
         const title = firstMatch(block, /^###\s+No\.\s*\d+:\s*(.+)$/m).trim();
         const prompt = firstMatch(block, /#### .*?提示词\s*\r?\n\s*```[\w-]*\r?\n(.*?)\r?\n```/s).trim();
         if (!title || !prompt) continue;
-        const images = extractMarkdownImages(baseUrl, block);
+        const images = extractPromptImages(baseUrl, block);
         items.push(defaultPrompt(`${idPrefix}-${leftPad(items.length + 1)}`, title, prompt, images[0] || "", youMindTags(title, modelTag), markdownPreview(images)));
     }
     return items;
@@ -186,14 +187,27 @@ function firstMatch(value: string, pattern: RegExp) {
     return pattern.exec(value)?.[1] || "";
 }
 
-function extractMarkdownImages(baseUrl: string, markdown: string) {
-    return Array.from(markdown.matchAll(/!\[[^\]]*]\(([^)]+)\)/g), (match) => absoluteImage(baseUrl, match[1])).filter(Boolean);
+function extractPromptImages(baseUrl: string, markdown: string) {
+    const images: string[] = [];
+    const seen = new Set<string>();
+    // 上游 README 混用 HTML 和 Markdown，优先提取案例图而非 Markdown 徽章图。
+    for (const pattern of [/<img[^>]+src=["']([^"']+)["']/gi, /!\[[^\]]*]\(([^)]+)\)/g]) {
+        for (const match of markdown.matchAll(pattern)) {
+            const image = absoluteImage(baseUrl, match[1]);
+            if (image && !seen.has(image)) {
+                seen.add(image);
+                images.push(image);
+            }
+        }
+    }
+    return images;
 }
 
 function absoluteImage(baseUrl: string, image: string) {
-    if (!image) return "";
-    if (/^https?:\/\//i.test(image)) return image;
-    return `${baseUrl}/${image.replace(/^\.?\//, "")}`;
+    const raw = image.trim();
+    const value = raw.startsWith("<") ? raw.slice(1, raw.indexOf(">")) : raw.split(/\s+/, 1)[0] || "";
+    if (!value || /^https?:\/\//i.test(value)) return value;
+    return `${baseUrl}/${value.replace(/^(?:\.\.\/|\.\/)+/, "").replace(/^\/+/, "")}`;
 }
 
 function tagsFromCategory(category: string) {
