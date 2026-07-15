@@ -3,6 +3,7 @@
 ## Unreleased
 
 + [调整] 前端升级到 Vite 架构后保留 Go API、账号画布同步和 Sub2API iframe 嵌入能力，并通过同源 `/api` 代理衔接。
++ [修复] Vite 登录页恢复处理 Linux.do 回调令牌，第三方登录可建立本地会话。
 
 ## v0.7.0 - 2026-07-14
 

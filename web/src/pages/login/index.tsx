@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { readSub2APIEmbedParams, withSub2APIEmbedParams } from "@/lib/sub2api-embed";
+import { fetchCurrentUser } from "@/services/api/auth";
 import { useUserStore } from "@/stores/use-user-store";
 
 type LoginFormValues = {
@@ -18,6 +19,7 @@ export default function LoginPage() {
     const [searchParams] = useSearchParams();
     const login = useUserStore((state) => state.login);
     const register = useUserStore((state) => state.register);
+    const setSession = useUserStore((state) => state.setSession);
     const user = useUserStore((state) => state.user);
     const isReady = useUserStore((state) => state.isReady);
     const isLoading = useUserStore((state) => state.isLoading);
@@ -27,6 +29,21 @@ export default function LoginPage() {
     const redirect = searchParams.get("redirect") || "/";
     const embed = readSub2APIEmbedParams();
     const sub2apiEmbedded = embed.embedded && Boolean(embed.token && embed.srcHost);
+
+    useEffect(() => {
+        if (sub2apiEmbedded) return;
+        const token = searchParams.get("token");
+        const error = searchParams.get("error");
+        if (error) message.error(error);
+        if (!token) return;
+        void fetchCurrentUser(token)
+            .then((nextUser) => {
+                setSession(token, nextUser);
+                message.success("登录成功");
+                navigate(redirect.startsWith("/") ? redirect : "/", { replace: true });
+            })
+            .catch((error) => message.error(error instanceof Error ? error.message : "登录失败"));
+    }, [message, navigate, redirect, searchParams, setSession, sub2apiEmbedded]);
 
     useEffect(() => {
         if (sub2apiEmbedded && user) navigate(withSub2APIEmbedParams("/canvas"), { replace: true });
