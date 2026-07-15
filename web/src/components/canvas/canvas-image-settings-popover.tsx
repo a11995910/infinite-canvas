@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Settings2 } from "lucide-react";
 import { Button } from "antd";
 
-import { ImageSettingsPanel, imageFormatLabel, imageQualityLabel, imageSizeLabel } from "@/components/image-settings-panel";
+import { ImageSettingsPanel, imageQualityLabel, imageSizeLabel } from "@/components/image-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { AiConfig } from "@/stores/use-config-store";
@@ -28,7 +28,6 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
     const quality = config.quality || "auto";
     const count = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
-    const outputFormat = config.outputFormat || "png";
     const updateOpen = (nextOpen: boolean) => {
         setOpen(nextOpen);
         onOpenChange?.(nextOpen);
@@ -71,7 +70,7 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
                     onClick={() => updateOpen(!open)}
                 >
                     <span className="truncate">
-                        {imageQualityLabel(quality)} · {imageSizeLabel(activeSize)} · {imageFormatLabel(outputFormat)} · {count} 张
+                        {imageQualityLabel(quality)} · {imageSizeLabel(activeSize)} · {count} 张
                     </span>
                 </Button>
             </span>

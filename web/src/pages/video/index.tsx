@@ -10,6 +10,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { isGrokImagineVideoConfig, normalizeGrokVideoDuration, normalizeGrokVideoResolution } from "@/lib/grok-imagine-video";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceRatio, seedanceReferenceLabel, seedanceVideoReferenceError, seedanceVideoReferenceHint, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
 import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
@@ -332,7 +333,7 @@ export default function VideoPage() {
                 }
                 if (state.status === "failed") throw new Error(state.error);
                 if (attempt === 119) throw new Error("视频生成超时，请稍后重试");
-                await delay(log.task.provider === "seedance" ? 5000 : 2500);
+                await delay(log.task.provider === "seedance" || log.task.provider === "grok" ? 5000 : 2500);
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "生成失败";
@@ -840,13 +841,14 @@ function buildLog({ prompt, model, config, references, videoReferences, audioRef
 
 function buildVideoConfig(config: AiConfig, model: string): AiConfig {
     const seedance = isSeedanceVideoConfig({ ...config, model });
+    const grokVideo = isGrokImagineVideoConfig({ ...config, model });
     return {
         ...config,
         model,
         videoModel: model,
-        size: seedance ? normalizeSeedanceRatio(config.size) : normalizeVideoSize(config.size),
-        videoSeconds: normalizeVideoSeconds(config.videoSeconds),
-        vquality: normalizeResolution(config.vquality),
+        size: seedance ? normalizeSeedanceRatio(config.size) : grokVideo ? config.size : normalizeVideoSize(config.size),
+        videoSeconds: grokVideo ? String(normalizeGrokVideoDuration(config.videoSeconds)) : normalizeVideoSeconds(config.videoSeconds),
+        vquality: grokVideo ? normalizeGrokVideoResolution(config.vquality).replace(/p$/i, "") : normalizeResolution(config.vquality),
         videoGenerateAudio: String(boolConfig(config.videoGenerateAudio, true)),
         videoWatermark: String(boolConfig(config.videoWatermark, false)),
     };

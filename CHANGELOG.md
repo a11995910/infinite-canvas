@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] Sub2API 视频渠道适配 Grok Imagine Video 异步接口，支持 `grok-imagine-video-1.5` 模型、任务轮询和视频结果保存。
 + [调整] 前端升级到 Vite 架构后保留 Go API、账号画布同步和 Sub2API iframe 嵌入能力，并通过同源 `/api` 代理衔接。
 + [修复] Vite 登录页恢复处理 Linux.do 回调令牌，第三方登录可建立本地会话。
 

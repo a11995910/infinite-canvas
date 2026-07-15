@@ -24,6 +24,7 @@ export type Sub2APIEmbedConfig = {
     selectedKey: Sub2APIEmbedKey;
     selectedImageKey: Sub2APIEmbedKey;
     selectedTextKey: Sub2APIEmbedKey;
+    selectedVideoKey?: Sub2APIEmbedKey;
     keys: Sub2APIEmbedKey[];
 };
 
@@ -39,7 +40,7 @@ export const SUB2API_EMBED_CHANNEL_ROLES: Sub2APIEmbedRole[] = ["image", "text",
 export const SUB2API_EMBED_MODEL_FALLBACKS: Record<Sub2APIEmbedRole, string[]> = {
     image: ["gpt-image-2"],
     text: ["gpt-5.5"],
-    video: ["Agnes-Video-V2.0"],
+    video: ["grok-imagine-video-1.5"],
 };
 
 const embedQueryKeys = ["ui_mode", "token", "src_host", "src_url", "theme", "lang"] as const;
@@ -70,8 +71,11 @@ export function withSub2APIEmbedParams(path: string) {
     return `${target.pathname}${target.search}${target.hash}`;
 }
 
-export function chooseSub2APIKey(keys: Sub2APIEmbedKey[], role: "image" | "text" = "image") {
+export function chooseSub2APIKey(keys: Sub2APIEmbedKey[], role: Sub2APIEmbedRole = "image") {
     const active = keys.filter((key) => key.status === "active" && key.key);
+    if (role === "video") {
+        return active.find((key) => isSub2APIGrokKey(key) && key.group?.allow_image_generation === true) || active.find(isSub2APIGrokKey) || null;
+    }
     if (role === "text") {
         return active.find((key) => key.group?.platform === "openai" && key.group.allow_image_generation !== true) || active.find((key) => key.group?.allow_image_generation !== true) || active.find((key) => key.group?.platform === "openai") || active[0] || null;
     }
@@ -80,11 +84,14 @@ export function chooseSub2APIKey(keys: Sub2APIEmbedKey[], role: "image" | "text"
 
 export function buildSub2APIEmbedConfig(config: AiConfig, payload: Sub2APIEmbedConfig, selectedKeys?: Sub2APIEmbedSelectedKeys, channelModels?: Partial<Record<Sub2APIEmbedRole, string[]>>): AiConfig {
     const keys = resolveSub2APIEmbedKeys(config, payload, selectedKeys);
-    const embedChannels = SUB2API_EMBED_CHANNEL_ROLES.map((role) => buildSub2APIEmbedChannel(payload, role, keys[role], channelModels?.[role]));
+    const imageChannel = buildSub2APIEmbedChannel(payload, "image", keys.image, channelModels?.image);
+    const textChannel = buildSub2APIEmbedChannel(payload, "text", keys.text, channelModels?.text);
+    const videoChannel = keys.video ? buildSub2APIEmbedChannel(payload, "video", keys.video, channelModels?.video) : undefined;
+    const embedChannels = [imageChannel, textChannel, ...(videoChannel ? [videoChannel] : [])];
     const channels = [...embedChannels, ...config.channels.filter((channel) => !SUB2API_EMBED_CHANNEL_IDS.includes(channel.id))];
-    const imageOptions = optionsForChannel(embedChannels[0]);
-    const textOptions = optionsForChannel(embedChannels[1]);
-    const videoOptions = optionsForChannel(embedChannels[2]);
+    const imageOptions = optionsForChannel(imageChannel);
+    const textOptions = optionsForChannel(textChannel);
+    const videoOptions = optionsForChannel(videoChannel);
 
     return {
         ...config,
@@ -96,10 +103,10 @@ export function buildSub2APIEmbedConfig(config: AiConfig, payload: Sub2APIEmbedC
         models: modelOptionsFromChannels(channels),
         imageModel: resolveRoleModel(config.imageModel, imageOptions),
         textModel: resolveRoleModel(config.textModel, textOptions),
-        videoModel: resolveRoleModel(config.videoModel, videoOptions),
+        videoModel: videoOptions.length ? resolveRoleModel(config.videoModel, videoOptions) : replaceEmbedModel(config.videoModel, []),
         imageModels: mergeRoleOptions(config.imageModels, imageOptions),
         textModels: mergeRoleOptions(config.textModels, textOptions),
-        videoModels: mergeRoleOptions(config.videoModels, videoOptions),
+        videoModels: videoOptions.length ? mergeRoleOptions(config.videoModels, videoOptions) : config.videoModels.filter((model) => !isEmbedModel(model)),
     };
 }
 
@@ -123,9 +130,13 @@ export function clearSub2APIEmbedConfig(config: AiConfig): AiConfig {
 
 export function hasSub2APIEmbedChannel(config: AiConfig, payload: Sub2APIEmbedConfig) {
     const keys = new Set(payload.keys.filter((key) => key.status === "active" && key.key).map((key) => key.key));
-    return [SUB2API_EMBED_IMAGE_CHANNEL_ID, SUB2API_EMBED_TEXT_CHANNEL_ID].every((id) => {
+    const videoKeys = new Set(payload.keys.filter((key) => key.status === "active" && key.key && isSub2APIGrokKey(key)).map((key) => key.key));
+    const requiredIds = [SUB2API_EMBED_IMAGE_CHANNEL_ID, SUB2API_EMBED_TEXT_CHANNEL_ID, ...(payload.selectedVideoKey ? [SUB2API_EMBED_VIDEO_CHANNEL_ID] : [])];
+    return requiredIds.every((id) => {
         const channel = config.channels.find((item) => item.id === id);
-        return channel?.baseUrl === payload.proxyBaseUrl && keys.has(channel.apiKey);
+        if (channel?.baseUrl !== payload.proxyBaseUrl) return false;
+        if (id === SUB2API_EMBED_VIDEO_CHANNEL_ID) return videoKeys.has(channel.apiKey) && channel.models.includes(SUB2API_EMBED_MODEL_FALLBACKS.video[0]);
+        return keys.has(channel.apiKey);
     });
 }
 
@@ -135,11 +146,12 @@ export function sub2APIEmbedChannelId(role: Sub2APIEmbedRole) {
     return SUB2API_EMBED_IMAGE_CHANNEL_ID;
 }
 
-function resolveSub2APIEmbedKeys(config: AiConfig, payload: Sub2APIEmbedConfig, selectedKeys?: Sub2APIEmbedSelectedKeys): Record<Sub2APIEmbedRole, Sub2APIEmbedKey> {
+function resolveSub2APIEmbedKeys(config: AiConfig, payload: Sub2APIEmbedConfig, selectedKeys?: Sub2APIEmbedSelectedKeys) {
+    const currentVideoKey = currentSub2APIEmbedKey(config, payload, "video");
     return {
         image: selectedKeys?.image || currentSub2APIEmbedKey(config, payload, "image") || payload.selectedImageKey || payload.selectedKey,
         text: selectedKeys?.text || currentSub2APIEmbedKey(config, payload, "text") || payload.selectedTextKey || payload.selectedKey,
-        video: selectedKeys?.video || selectedKeys?.image || currentSub2APIEmbedKey(config, payload, "video") || payload.selectedImageKey || payload.selectedKey,
+        video: selectedKeys?.video || (isSub2APIGrokKey(currentVideoKey) ? currentVideoKey : undefined) || payload.selectedVideoKey,
     };
 }
 
@@ -178,4 +190,8 @@ function replaceEmbedModel(current: string, fallback: string[]) {
 
 function isEmbedModel(model: string) {
     return SUB2API_EMBED_CHANNEL_IDS.some((id) => model.startsWith(`${id}::`));
+}
+
+function isSub2APIGrokKey(key: Sub2APIEmbedKey | undefined) {
+    return key?.group?.platform?.trim().toLowerCase() === "grok";
 }

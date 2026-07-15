@@ -17,9 +17,10 @@ export async function fetchSub2APIEmbedConfig(params: { token: string; srcHost: 
     const data = payload as Sub2APIEmbedKeysResponse;
     const selectedImageKey = chooseSub2APIKey(data.keys || [], "image");
     const selectedTextKey = chooseSub2APIKey(data.keys || [], "text") || selectedImageKey;
-    const selectedKey = selectedImageKey || selectedTextKey;
+    const selectedVideoKey = chooseSub2APIKey(data.keys || [], "video") || undefined;
+    const selectedKey = selectedImageKey || selectedTextKey || selectedVideoKey;
     if (!selectedKey) throw new Error("当前账号没有可用的 Sub2API Key");
-    return { sourceOrigin: data.sourceOrigin, proxyBaseUrl: data.proxyBaseUrl, selectedKey, selectedImageKey: selectedImageKey || selectedKey, selectedTextKey: selectedTextKey || selectedKey, keys: data.keys || [] };
+    return { sourceOrigin: data.sourceOrigin, proxyBaseUrl: data.proxyBaseUrl, selectedKey, selectedImageKey: selectedImageKey || selectedKey, selectedTextKey: selectedTextKey || selectedKey, selectedVideoKey, keys: data.keys || [] };
 }
 
 export async function fetchSub2APIEmbedSession(params: { token: string; srcHost: string }): Promise<AuthSession> {

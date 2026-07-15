@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
+import { grokVideoDurationOptions, grokVideoResolutionOptions, isGrokImagineVideoConfig } from "@/lib/grok-imagine-video";
 import { boolConfig, isSeedanceFastModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationOptions, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { modelOptionName, type AiConfig } from "@/stores/use-config-store";
@@ -39,10 +40,13 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
         return <SeedanceVideoSettingsPanel config={config} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
     }
 
+    const grokVideo = isGrokImagineVideoConfig(config);
     const seconds = config.videoSeconds || "6";
     const size = normalizeVideoSizeValue(config.size);
     const dimensions = readSizeDimensions(size);
     const resolution = normalizeVideoResolutionValue(config.vquality);
+    const activeResolutionOptions = grokVideo ? grokVideoResolutionOptions : resolutionOptions;
+    const activeSecondOptions = grokVideo ? grokVideoDurationOptions : secondOptions;
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 720));
         onConfigChange("size", `${key === "width" ? next : dimensions.width}x${key === "height" ? next : dimensions.height}`);
@@ -54,12 +58,12 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 {showTitle ? <div className="text-lg font-semibold">视频设置</div> : null}
                 <SettingGroup title="清晰度" color={theme.node.muted}>
                     <div className="grid grid-cols-3 gap-2.5">
-                        {resolutionOptions.map((item) => (
+                        {activeResolutionOptions.map((item) => (
                             <OptionPill key={item.value} selected={resolution === item.value} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
                                 {item.label}
                             </OptionPill>
                         ))}
-                        <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} />
+                        {grokVideo ? null : <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} />}
                     </div>
                 </SettingGroup>
                 <SettingGroup title="尺寸" color={theme.node.muted}>
@@ -91,12 +95,12 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 </SettingGroup>
                 <SettingGroup title="秒数" color={theme.node.muted}>
                     <div className="grid grid-cols-3 gap-2.5">
-                        {secondOptions.map((value) => (
+                        {activeSecondOptions.map((value) => (
                             <OptionPill key={value} selected={seconds === String(value)} theme={theme} onClick={() => onConfigChange("videoSeconds", String(value))}>
                                 {value}s
                             </OptionPill>
                         ))}
-                        <NumberInput value={seconds} min={1} max={20} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                        <NumberInput value={seconds} min={1} max={grokVideo ? 15 : 20} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
                     </div>
                 </SettingGroup>
             </div>

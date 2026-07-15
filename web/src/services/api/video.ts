@@ -1,5 +1,6 @@
 import axios from "axios";
 
+import { isGrokImagineVideo15Model, isGrokImagineVideoConfig, normalizeGrokVideoAspectRatio, normalizeGrokVideoDuration, normalizeGrokVideoResolution } from "@/lib/grok-imagine-video";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -19,11 +20,18 @@ type SeedanceTask = {
     result_url?: string;
     video_url?: string;
 };
+type GrokVideoTaskResponse = {
+    request_id?: string;
+    id?: string;
+    status?: "pending" | "done" | "completed" | "failed" | "expired";
+    error?: { code?: string; message?: string } | null;
+    video?: { url?: string | null; file_output?: { public_url?: string | null } | null } | null;
+};
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal };
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "seedance"; model: string };
+export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "grok"; model: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -39,7 +47,7 @@ function aiHeaders(config: AiConfig, contentType?: string) {
 
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
     const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences, options);
-    const delayMs = task.provider === "seedance" ? 5000 : 2500;
+    const delayMs = task.provider === "seedance" || task.provider === "grok" ? 5000 : 2500;
     for (let attempt = 0; attempt < 120; attempt += 1) {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
         const state = await pollVideoGenerationTask(config, task, options);
@@ -61,13 +69,18 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     if (videoReferences.length || audioReferences.length) {
         throw new Error("当前视频接口不支持参考视频或参考音频，请切换到 Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
+    if (isGrokImagineVideoConfig(requestConfig)) {
+        return createGrokVideoTask(requestConfig, selectedModel, prompt, references, options);
+    }
     return createOpenAIVideoTask(requestConfig, selectedModel, prompt, references, options);
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     const requestConfig = resolveModelRequestConfig(config, task.model);
     assertVideoConfig(requestConfig, requestConfig.model);
-    return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, options) : pollOpenAIVideoTask(requestConfig, task, options);
+    if (task.provider === "seedance") return pollSeedanceTask(requestConfig, task, options);
+    if (task.provider === "grok") return pollGrokVideoTask(requestConfig, task, options);
+    return pollOpenAIVideoTask(requestConfig, task, options);
 }
 
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
@@ -115,6 +128,72 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
         return { status: "pending" };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务查询失败"));
+    }
+}
+
+async function createGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    const modelName = modelOptionName(model);
+    const images = await Promise.all(
+        references.slice(0, 7).map(async (image) => {
+            const url = await imageToDataUrl(image);
+            if (!url) throw new Error("参考图读取失败，请换一张图片或重新上传");
+            return { url };
+        }),
+    );
+    const resolution = normalizeGrokVideoResolution(config.vquality);
+    if (isGrokImagineVideo15Model(modelName) && images.length > 1) {
+        throw new Error("grok-imagine-video-1.5 一次只支持 1 张首帧图，请移除多余参考图");
+    }
+    if (resolution === "1080p" && (!isGrokImagineVideo15Model(modelName) || images.length !== 1)) {
+        throw new Error("1080p 仅支持 grok-imagine-video-1.5 图生视频，请选择该模型并添加 1 张参考图");
+    }
+
+    const aspectRatio = normalizeGrokVideoAspectRatio(config.size);
+    const payload: {
+        model: string;
+        prompt: string;
+        duration: number;
+        resolution: string;
+        aspect_ratio?: string;
+        image?: { url: string };
+        reference_images?: Array<{ url: string }>;
+    } = {
+        model: modelName,
+        prompt,
+        duration: normalizeGrokVideoDuration(config.videoSeconds),
+        resolution,
+        ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+    };
+    if (images.length) {
+        if (isGrokImagineVideo15Model(modelName)) {
+            payload.image = images[0];
+        } else {
+            payload.reference_images = images;
+        }
+    }
+
+    try {
+        const created = unwrapGrokVideoTask((await axios.post<ApiEnvelope<GrokVideoTaskResponse>>(aiApiUrl(config, "/videos/generations"), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
+        const id = created.request_id || created.id;
+        if (!id) throw new Error("Grok 视频接口没有返回任务 ID");
+        return { id, provider: "grok", model };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Grok 视频任务创建失败"));
+    }
+}
+
+async function pollGrokVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    try {
+        const state = unwrapGrokVideoTask((await axios.get<ApiEnvelope<GrokVideoTaskResponse>>(aiApiUrl(config, `/videos/${encodeURIComponent(task.id)}`), { headers: aiHeaders(config), signal: options?.signal })).data);
+        const url = grokVideoResultUrl(state);
+        if (state.status === "done" || state.status === "completed") {
+            if (!url) return { status: "failed", error: "Grok 视频任务已完成但没有返回视频 URL" };
+            return { status: "completed", result: await videoResultFromUrl(url, options) };
+        }
+        if (state.status === "failed" || state.status === "expired") return { status: "failed", error: readApiErrorMessage(state.error) || `Grok 视频生成${state.status === "expired" ? "已过期" : "失败"}` };
+        return { status: "pending" };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Grok 视频任务查询失败"));
     }
 }
 
@@ -271,6 +350,10 @@ function unwrapSeedanceTask(payload: ApiEnvelope<SeedanceTask>) {
     return unwrapEnvelope(payload, "Seedance 接口没有返回任务");
 }
 
+function unwrapGrokVideoTask(payload: ApiEnvelope<GrokVideoTaskResponse>) {
+    return unwrapEnvelope(payload, "Grok 视频接口没有返回任务");
+}
+
 function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
     if (!payload) throw new Error(emptyMessage);
     if (typeof payload === "object" && "code" in payload && payload.code !== undefined) {
@@ -283,6 +366,10 @@ function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
 
 function videoResultUrl(payload: VideoResponse | SeedanceTask) {
     return [payload.video_url, payload.result_url, payload.url, payload.content?.video_url, payload.content?.url].find((url) => typeof url === "string" && (isPublicMediaUrl(url) || /\.mp4(\?|#|$)/i.test(url)));
+}
+
+function grokVideoResultUrl(payload: GrokVideoTaskResponse) {
+    return [payload.video?.url, payload.video?.file_output?.public_url].find((url): url is string => typeof url === "string" && Boolean(url.trim()));
 }
 
 function readApiErrorMessage(value: unknown): string {
