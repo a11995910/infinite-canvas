@@ -5,15 +5,12 @@ import "streamdown/styles.css";
 import "./styles/globals.css";
 import { RouterProvider } from "react-router-dom";
 
-import { AppProviders } from "@/components/layout/app-providers";
 import { router } from "@/router";
 
 document.body.style.fontFamily = '"SF Pro Display","SF Pro Text","PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif';
 
 createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-        <AppProviders>
-            <RouterProvider router={router} />
-        </AppProviders>
+        <RouterProvider router={router} />
     </React.StrictMode>,
 );

@@ -156,6 +156,10 @@ export function modelMatchesCapability(model: string, capability?: ModelCapabili
     return isTextModelName(model);
 }
 
+export function resolveVideoModel(config: Pick<AiConfig, "model" | "videoModel">) {
+    return modelMatchesCapability(config.model, "video") ? config.model : config.videoModel;
+}
+
 export function filterModelsByCapability(models: string[], capability?: ModelCapability) {
     return capability ? models.filter((model) => modelMatchesCapability(model, capability)) : models;
 }

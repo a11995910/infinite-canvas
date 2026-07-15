@@ -1,4 +1,4 @@
-import { modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionName, resolveVideoModel, type AiConfig } from "@/stores/use-config-store";
 
 const grokImagineVideoModels = new Set(["grok-imagine-video", "grok-imagine-video-1.5"]);
 const grokVideoAspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
@@ -19,9 +19,8 @@ export function isGrokImagineVideo15Model(model: string) {
     return modelOptionName(model).trim().toLowerCase() === "grok-imagine-video-1.5";
 }
 
-export function isGrokImagineVideoConfig(config: AiConfig | Pick<AiConfig, "model" | "videoModel" | "baseUrl">) {
-    const requestConfig = "channels" in config ? resolveModelRequestConfig(config, config.model || config.videoModel) : config;
-    return isGrokImagineVideoModel(requestConfig.model || requestConfig.videoModel);
+export function isGrokImagineVideoConfig(config: Pick<AiConfig, "model" | "videoModel">) {
+    return isGrokImagineVideoModel(resolveVideoModel(config));
 }
 
 export function normalizeGrokVideoDuration(value: string) {
