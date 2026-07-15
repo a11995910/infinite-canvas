@@ -9,6 +9,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 - Vite 路由启动：首页、视频页和登录页应正常渲染，控制台不应出现 `useLocation()` 缺少 Router 上下文的错误。
 - Linux.do 登录：第三方回调返回 `/login?token=...` 后，Vite 登录页应读取令牌、获取当前用户并跳转回原页面。
 - Sub2API iframe 嵌入：允许来源、有效登录令牌和有效 Key 下应自动创建画布会话并按图片、文本、视频填充渠道；来源不在白名单、令牌失效、签名过期和内网来源未显式允许时应给出对应失败提示。
+- Sub2API HTTPS 嵌入：从 HTTPS Sub2API 页面进入时，图片、视频和文本渠道的代理 Base URL 必须使用 `https://`，浏览器控制台不应出现 Mixed Content 拦截。
 - Sub2API Grok 视频：Grok 分组且具备图片生成权限的 Key 应自动配置 `grok-imagine-video-1.5` 视频模型；生成请求应使用 `/v1/videos/generations`，随后按 `request_id` 查询 `/v1/videos/{request_id}` 并保存 `video.url`。视频设置应显示 480p、720p、1080p 和 1-15 秒，1080p 仅在 `grok-imagine-video-1.5` 且添加 1 张首帧图时可提交。
 - OpenAI 兼容渠道：Base URL 支持填写站点根地址、以 `/v1` 结尾的 OpenAI Base URL、`llms.txt` / `llms-full.txt` 文档地址，以及误填的 `/v1/models`、`/v1/images/generations`、`/v1/images/edits` 等完整接口地址；需使用 `https://api.skylee9.cloudns.ch`、`https://api.skylee9.cloudns.ch/v1` 和 `https://api.skylee9.cloudns.ch/llms.txt` 分别拉取模型，并用 `gpt-image-2` 验证文生图和图生图均请求到正确的 `/v1` JSON 接口。
 - 画布节点创建：鼠标左键双击画布空白区域会在点击位置打开节点选择菜单，可创建文本、图片、视频、音频、生成配置和组节点；双击已有节点或连线不应触发菜单。

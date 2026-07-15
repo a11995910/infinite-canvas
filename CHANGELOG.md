@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] Sub2API 嵌入代理保留 HTTPS 转发协议，避免生图、视频和文本请求触发浏览器混合内容拦截。
 + [修复] Vite 路由根节点在路由上下文内挂载全局初始化组件，恢复页面正常渲染。
 + [修复] Sub2API 视频渠道适配 Grok Imagine Video 异步接口，支持 `grok-imagine-video-1.5` 模型、任务轮询和视频结果保存。
 + [调整] 前端升级到 Vite 架构后保留 Go API、账号画布同步和 Sub2API iframe 嵌入能力，并通过同源 `/api` 代理衔接。
