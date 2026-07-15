@@ -52,7 +52,7 @@ export type WebdavSyncConfig = {
     directory: string;
     lastSyncedAt: string;
 };
-export type ConfigTabKey = "channels" | "models" | "preferences" | "webdav" | "codex";
+export type ConfigTabKey = "channels" | "models" | "preferences" | "webdav";
 
 type LegacyPersistedConfig = Partial<AiConfig> & {
     localChannels?: ModelChannel[];
