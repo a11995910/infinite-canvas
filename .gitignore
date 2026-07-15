@@ -11,3 +11,6 @@ data_副本/
 .DS_Store
 .idea
 web/dist
+
+**/dist
+web/public/plugins

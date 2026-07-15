@@ -5,6 +5,10 @@
 + [调整] 前端升级到 Vite 架构后保留 Go API、账号画布同步和 Sub2API iframe 嵌入能力，并通过同源 `/api` 代理衔接。
 + [修复] Vite 登录页恢复处理 Linux.do 回调令牌，第三方登录可建立本地会话。
 
+## v0.7.1 - 2026-07-15
+
++ [修复] 修复通过 `crypto.randomUUID` 不可用导致页面白屏报错的问题，改用 nanoid 生成 id。
+
 ## v0.7.0 - 2026-07-14
 
 + [新增] Agent 对话消息改用 streamdown 流式渲染，提升Markdown 内容展示效果。
