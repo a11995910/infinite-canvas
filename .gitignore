@@ -10,3 +10,4 @@ data_副本/
 *.tsbuildinfo
 .DS_Store
 .idea
+web/dist

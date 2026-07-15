@@ -1,4 +1,4 @@
-import type { AiConfig, LocalModelChannel } from "@/stores/use-config-store";
+import { encodeChannelModel, modelOptionsFromChannels, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 
 export type Sub2APIEmbedParams = {
     embedded: boolean;
@@ -41,10 +41,10 @@ export const SUB2API_EMBED_MODEL_FALLBACKS: Record<Sub2APIEmbedRole, string[]> =
     text: ["gpt-5.5"],
     video: ["Agnes-Video-V2.0"],
 };
-const SUB2API_EMBED_QUERY_KEYS = ["ui_mode", "token", "src_host", "src_url", "theme", "lang"] as const;
+
+const embedQueryKeys = ["ui_mode", "token", "src_host", "src_url", "theme", "lang"] as const;
 
 export function readSub2APIEmbedParams(): Sub2APIEmbedParams {
-    if (typeof window === "undefined") return { embedded: false, token: "", srcHost: "" };
     const params = new URLSearchParams(window.location.search);
     return {
         embedded: params.get("ui_mode") === "embedded",
@@ -55,16 +55,15 @@ export function readSub2APIEmbedParams(): Sub2APIEmbedParams {
 
 export function isSub2APIEmbedded() {
     const params = readSub2APIEmbedParams();
-    return params.embedded && !!params.token && !!params.srcHost;
+    return params.embedded && Boolean(params.token && params.srcHost);
 }
 
 export function withSub2APIEmbedParams(path: string) {
-    if (typeof window === "undefined") return path;
     const currentParams = new URLSearchParams(window.location.search);
     if (currentParams.get("ui_mode") !== "embedded" || !currentParams.get("token") || !currentParams.get("src_host")) return path;
 
     const target = new URL(path, window.location.origin);
-    SUB2API_EMBED_QUERY_KEYS.forEach((key) => {
+    embedQueryKeys.forEach((key) => {
         const value = currentParams.get(key);
         if (value && !target.searchParams.has(key)) target.searchParams.set(key, value);
     });
@@ -80,59 +79,53 @@ export function chooseSub2APIKey(keys: Sub2APIEmbedKey[], role: "image" | "text"
 }
 
 export function buildSub2APIEmbedConfig(config: AiConfig, payload: Sub2APIEmbedConfig, selectedKeys?: Sub2APIEmbedSelectedKeys, channelModels?: Partial<Record<Sub2APIEmbedRole, string[]>>): AiConfig {
-    const resolvedKeys = resolveSub2APIEmbedKeys(config, payload, selectedKeys);
-    const embedChannels = SUB2API_EMBED_CHANNEL_ROLES.map((role) => buildSub2APIEmbedChannel(payload, role, resolvedKeys[role], channelModels?.[role]));
-    const currentChannels = config.localChannels.filter((item) => !SUB2API_EMBED_CHANNEL_IDS.includes(item.id));
-    const channels = [...embedChannels, ...currentChannels];
-    const models = Array.from(new Set(channels.flatMap((item) => item.models)));
+    const keys = resolveSub2APIEmbedKeys(config, payload, selectedKeys);
+    const embedChannels = SUB2API_EMBED_CHANNEL_ROLES.map((role) => buildSub2APIEmbedChannel(payload, role, keys[role], channelModels?.[role]));
+    const channels = [...embedChannels, ...config.channels.filter((channel) => !SUB2API_EMBED_CHANNEL_IDS.includes(channel.id))];
+    const imageOptions = optionsForChannel(embedChannels[0]);
+    const textOptions = optionsForChannel(embedChannels[1]);
+    const videoOptions = optionsForChannel(embedChannels[2]);
+
     return {
         ...config,
         channelMode: "local",
         baseUrl: embedChannels[0].baseUrl,
         apiKey: embedChannels[0].apiKey,
-        localChannels: channels,
-        models,
-        activeChannelId: "",
-        imageChannelId: SUB2API_EMBED_IMAGE_CHANNEL_ID,
-        textChannelId: SUB2API_EMBED_TEXT_CHANNEL_ID,
-        videoChannelId: SUB2API_EMBED_VIDEO_CHANNEL_ID,
-        apiMode: "images",
-        imageModel: resolveRoleModel(config.imageModel, embedChannels[0].models, "gpt-image-2"),
-        textModel: resolveRoleModel(config.textModel, embedChannels[1].models, "gpt-5.5"),
-        videoModel: resolveRoleModel(config.videoModel, embedChannels[2].models, "Agnes-Video-V2.0"),
-        responseFormatB64Json: true,
+        apiFormat: "openai",
+        channels,
+        models: modelOptionsFromChannels(channels),
+        imageModel: resolveRoleModel(config.imageModel, imageOptions),
+        textModel: resolveRoleModel(config.textModel, textOptions),
+        videoModel: resolveRoleModel(config.videoModel, videoOptions),
+        imageModels: mergeRoleOptions(config.imageModels, imageOptions),
+        textModels: mergeRoleOptions(config.textModels, textOptions),
+        videoModels: mergeRoleOptions(config.videoModels, videoOptions),
     };
 }
 
 export function clearSub2APIEmbedConfig(config: AiConfig): AiConfig {
-    const localChannels = config.localChannels.filter((item) => !SUB2API_EMBED_CHANNEL_IDS.includes(item.id));
-    const hasEmbedChannel = localChannels.length !== config.localChannels.length;
-    const usesEmbedChannel = [config.activeChannelId, config.imageChannelId, config.textChannelId, config.videoChannelId].some((id) => SUB2API_EMBED_CHANNEL_IDS.includes(id));
-    if (!hasEmbedChannel && !usesEmbedChannel) return config;
+    const channels = config.channels.filter((channel) => !SUB2API_EMBED_CHANNEL_IDS.includes(channel.id));
+    if (channels.length === config.channels.length) return config;
 
-    const fallbackChannel = localChannels[0];
-    const fallbackId = fallbackChannel?.id || "";
-    const replaceEmbedId = (id: string) => (SUB2API_EMBED_CHANNEL_IDS.includes(id) ? fallbackId : id);
-    const models = Array.from(new Set(localChannels.flatMap((item) => item.models)));
+    const fallbackOptions = optionsForChannel(channels[0]);
     return {
         ...config,
-        channelMode: config.channelMode === "local" && !localChannels.length ? "remote" : config.channelMode,
-        baseUrl: fallbackChannel?.baseUrl || "",
-        apiKey: fallbackChannel?.apiKey || "",
-        localChannels,
-        models,
-        activeChannelId: replaceEmbedId(config.activeChannelId),
-        imageChannelId: replaceEmbedId(config.imageChannelId),
-        textChannelId: replaceEmbedId(config.textChannelId),
-        videoChannelId: replaceEmbedId(config.videoChannelId),
+        channels,
+        models: modelOptionsFromChannels(channels),
+        imageModel: replaceEmbedModel(config.imageModel, fallbackOptions),
+        textModel: replaceEmbedModel(config.textModel, fallbackOptions),
+        videoModel: replaceEmbedModel(config.videoModel, fallbackOptions),
+        imageModels: config.imageModels.filter((model) => !isEmbedModel(model)),
+        textModels: config.textModels.filter((model) => !isEmbedModel(model)),
+        videoModels: config.videoModels.filter((model) => !isEmbedModel(model)),
     };
 }
 
 export function hasSub2APIEmbedChannel(config: AiConfig, payload: Sub2APIEmbedConfig) {
-    const activeKeys = payload.keys.filter((key) => key.status === "active" && key.key);
+    const keys = new Set(payload.keys.filter((key) => key.status === "active" && key.key).map((key) => key.key));
     return [SUB2API_EMBED_IMAGE_CHANNEL_ID, SUB2API_EMBED_TEXT_CHANNEL_ID].every((id) => {
-        const channel = config.localChannels.find((item) => item.id === id);
-        return channel?.baseUrl === payload.proxyBaseUrl && activeKeys.some((key) => key.key === channel.apiKey);
+        const channel = config.channels.find((item) => item.id === id);
+        return channel?.baseUrl === payload.proxyBaseUrl && keys.has(channel.apiKey);
     });
 }
 
@@ -151,13 +144,11 @@ function resolveSub2APIEmbedKeys(config: AiConfig, payload: Sub2APIEmbedConfig, 
 }
 
 function currentSub2APIEmbedKey(config: AiConfig, payload: Sub2APIEmbedConfig, role: Sub2APIEmbedRole) {
-    const channelId = role === "video" ? SUB2API_EMBED_VIDEO_CHANNEL_ID : sub2APIEmbedChannelId(role);
-    const legacyKey = role === "image" ? config.localChannels.find((item) => item.id === SUB2API_EMBED_CHANNEL_ID)?.apiKey || config.apiKey : "";
-    const currentKey = config.localChannels.find((item) => item.id === channelId)?.apiKey || legacyKey;
-    return payload.keys.find((key) => key.status === "active" && key.key && key.key === currentKey);
+    const channel = config.channels.find((item) => item.id === sub2APIEmbedChannelId(role));
+    return payload.keys.find((key) => key.status === "active" && key.key === channel?.apiKey);
 }
 
-function buildSub2APIEmbedChannel(payload: Sub2APIEmbedConfig, role: Sub2APIEmbedRole, selectedKey: Sub2APIEmbedKey, models?: string[]): LocalModelChannel {
+function buildSub2APIEmbedChannel(payload: Sub2APIEmbedConfig, role: Sub2APIEmbedRole, selectedKey: Sub2APIEmbedKey, models?: string[]): ModelChannel {
     const roleName = role === "text" ? "文本" : role === "video" ? "视频" : "图片";
     return {
         id: sub2APIEmbedChannelId(role),
@@ -169,7 +160,22 @@ function buildSub2APIEmbedChannel(payload: Sub2APIEmbedConfig, role: Sub2APIEmbe
     };
 }
 
-function resolveRoleModel(current: string, models: string[], fallback: string) {
-    if (current && models.includes(current)) return current;
-    return models[0] || current || fallback;
+function optionsForChannel(channel?: ModelChannel) {
+    return channel ? channel.models.map((model) => encodeChannelModel(channel.id, model)) : [];
+}
+
+function resolveRoleModel(current: string, options: string[]) {
+    return options.includes(current) ? current : options[0] || current;
+}
+
+function mergeRoleOptions(current: string[], options: string[]) {
+    return [...options, ...current.filter((model) => !isEmbedModel(model))];
+}
+
+function replaceEmbedModel(current: string, fallback: string[]) {
+    return isEmbedModel(current) ? fallback[0] || "" : current;
+}
+
+function isEmbedModel(model: string) {
+    return SUB2API_EMBED_CHANNEL_IDS.some((id) => model.startsWith(`${id}::`));
 }

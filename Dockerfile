@@ -1,20 +1,20 @@
-# 构建 Next.js 前端产物。
-FROM node:22-bookworm-slim AS web-build
+# 构建 Vite 前端产物。
+FROM oven/bun:1.3.13 AS web-build
 
 WORKDIR /app/web
-COPY web/package.json web/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --legacy-peer-deps --registry=https://registry.npmmirror.com --cache=/root/.npm
+COPY web/package.json web/bun.lock ./
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --cache-dir=/root/.bun/install/cache
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
-RUN npm run build
+RUN bun run build
 
-# 构建 Go 后端入口。
+# 构建保留的认证、存储和 Sub2API 服务端接口。
 FROM golang:1.25-alpine AS api-build
 
 WORKDIR /app
-ENV GOPROXY=https://goproxy.cn,direct
 COPY go.mod go.sum ./
+RUN go mod download
 COPY config ./config
 COPY handler ./handler
 COPY middleware ./middleware
@@ -23,35 +23,16 @@ COPY repository ./repository
 COPY router ./router
 COPY service ./service
 COPY main.go ./
-RUN go build -o /server .
+RUN CGO_ENABLED=0 go build -o /server .
 
-# 运行镜像：Next.js 对外监听 13000，Go 只在容器内部监听 18080。
-FROM node:22-bookworm-slim
+# Nginx 提供静态前端并将同源 API 请求反代到容器内 Go 服务。
+FROM nginx:1.27-alpine
 
-ARG DEBIAN_MIRROR=http://mirrors.aliyun.com
 WORKDIR /app
-COPY VERSION /app/VERSION
-COPY CHANGELOG.md /app/CHANGELOG.md
 COPY --from=api-build /server /app/server
-COPY --from=web-build /app/web /app/web
-ENV PROMPT_DATA_DIR=/app/data/prompts
-RUN set -eux; \
-    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
-        sed -i \
-            -e "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" \
-            -e "s|http://security.debian.org|${DEBIAN_MIRROR}|g" \
-            /etc/apt/sources.list.d/debian.sources; \
-    elif [ -f /etc/apt/sources.list ]; then \
-        sed -i \
-            -e "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" \
-            -e "s|http://security.debian.org|${DEBIAN_MIRROR}|g" \
-            /etc/apt/sources.list; \
-    fi; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates; \
-    rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /app/data/prompts
+COPY --from=web-build /app/web/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN mkdir -p /app/data/prompts /app/data/logs/ai-calls
 
-EXPOSE 13000
-# 先启动内部 Go API，再由 Next.js 提供页面并代理 /api/*。
-CMD ["sh", "-c", "PORT=18080 /app/server & cd /app/web && HOSTNAME=0.0.0.0 PORT=13000 API_BASE_URL=http://127.0.0.1:18080 npm run start"]
+EXPOSE 3000
+CMD ["sh", "-c", "PORT=18080 /app/server & exec nginx -g 'daemon off;'"]

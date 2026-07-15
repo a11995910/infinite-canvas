@@ -1,39 +1,26 @@
-"use client";
-
 import { useEffect, useId, useMemo, useState } from "react";
 import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { normalizeLocalChannels, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
     value?: string;
-    channelId?: string;
-    onChange: (model: string, channelId?: string) => void;
+    onChange: (model: string) => void;
+    capability?: ModelCapability;
     className?: string;
     fullWidth?: boolean;
     placeholder?: string;
     onMissingConfig?: () => void;
 };
 
-export function ModelPicker({ config, value, channelId, onChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
+export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
-    const channelOptions = useMemo(() => {
-        const channels =
-            config.channelMode === "remote"
-                ? config.publicChannels.map((channel) => ({ id: channel.id, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models }))
-                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models }));
-        return channels.flatMap((channel) => channel.models.map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, model })));
-    }, [config]);
-    const options = useMemo(() => {
-        const existing = value && !channelOptions.some((item) => item.model === value && (!channelId || item.channelId === channelId)) ? [{ key: `${channelId || "__current__"}::${value}`, channelId: channelId || "", channelName: "当前", model: value }] : [];
-        return [...existing, ...channelOptions];
-    }, [channelId, channelOptions, value]);
+    const options = useMemo(() => Array.from(new Set([...(config.channelMode === "local" && !capability ? [value] : []), ...selectableModelsByCapability(config, capability)].filter((model): model is string => Boolean(model)))), [capability, config, value]);
     const current = value || "";
-    const currentValue = `${channelId || options.find((item) => item.model === current)?.channelId || ""}::${current}`;
 
     useEffect(() => {
         const closeOtherPicker = (event: Event) => {
@@ -46,19 +33,13 @@ export function ModelPicker({ config, value, channelId, onChange, className, ful
     return (
         <Select
             open={open}
-            value={current ? currentValue : ""}
+            value={current}
             onOpenChange={(nextOpen) => {
-                if (nextOpen && !options.length && config.channelMode === "local") {
-                    onMissingConfig?.();
-                    return;
-                }
+                if (nextOpen && !options.length && config.channelMode === "local") onMissingConfig?.();
                 if (nextOpen) window.dispatchEvent(new CustomEvent("model-picker-open", { detail: pickerId }));
                 setOpen(nextOpen);
             }}
-            onValueChange={(nextValue) => {
-                const option = options.find((item) => item.key === nextValue);
-                if (option) onChange(option.model, option.channelId);
-            }}
+            onValueChange={onChange}
         >
             <SelectTrigger
                 className={cn(
@@ -69,10 +50,10 @@ export function ModelPicker({ config, value, channelId, onChange, className, ful
                 )}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
-                title={current || placeholder}
+                title={current ? modelOptionLabel(config, current) : placeholder}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current || placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelOptionLabel(config, current) : placeholder}</span>
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
@@ -85,14 +66,14 @@ export function ModelPicker({ config, value, channelId, onChange, className, ful
                 onMouseDown={(event) => event.stopPropagation()}
             >
                 {options.length ? (
-                    options.map((option) => (
-                        <SelectItem key={option.key} value={option.key} textValue={`${option.model} ${option.channelName}`}>
-                            <ModelLabel model={option.model} channelName={option.channelName} />
+                    options.map((model) => (
+                        <SelectItem key={model} value={model} textValue={modelOptionLabel(config, model)}>
+                            <ModelLabel config={config} model={model} />
                         </SelectItem>
                     ))
                 ) : (
                     <SelectItem value="__empty__" disabled>
-                        {config.channelMode === "remote" ? "暂无可用模型" : "请先到配置里拉取模型列表"}
+                        {emptyModelLabel(config, capability)}
                     </SelectItem>
                 )}
             </SelectContent>
@@ -100,18 +81,23 @@ export function ModelPicker({ config, value, channelId, onChange, className, ful
     );
 }
 
-function ModelLabel({ model, channelName }: { model: string; channelName?: string }) {
+function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
+    const label = capability === "image" ? "生图" : capability === "video" ? "视频" : capability === "text" ? "文本" : capability === "audio" ? "音频" : "";
+    if (capability && config.models.length) return "请先在上方配置可选模型";
+    return config.models.length ? `暂无匹配的${label}模型` : "请先到配置里添加渠道和模型";
+}
+
+function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
-            <span className="truncate">{model}</span>
-            {channelName ? <span className="ml-auto max-w-24 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
+            <span className="truncate">{modelOptionLabel(config, model)}</span>
         </span>
     );
 }
 
 function ModelIcon({ model }: { model: string }) {
-    const icon = resolveModelIcon(model);
+    const icon = resolveModelIcon(modelOptionName(model));
     return icon ? <img src={icon} alt="" className="size-4 shrink-0 dark:invert" /> : <Cpu className="size-4 shrink-0 opacity-70" />;
 }
 

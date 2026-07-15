@@ -22,6 +22,9 @@ type Config struct {
 	LinuxDoTokenURL     string `env:"LINUX_DO_TOKEN_URL" envDefault:"https://connect.linux.do/oauth2/token"`
 	LinuxDoUserInfoURL  string `env:"LINUX_DO_USERINFO_URL" envDefault:"https://connect.linux.do/api/user"`
 	Sub2APIEmbedSecret  string `env:"SUB2API_EMBED_PROXY_SECRET"`
+	Sub2APIEmbedOrigins string `env:"SUB2API_EMBED_ALLOWED_ORIGINS"`
+	Sub2APIEmbedPrivate bool   `env:"SUB2API_EMBED_ALLOW_PRIVATE_HOSTS" envDefault:"false"`
+	Sub2APIEmbedTTL     int    `env:"SUB2API_EMBED_PROXY_TTL_SECONDS" envDefault:"86400"`
 }
 
 var Cfg Config

@@ -4,11 +4,7 @@ import { APP_VERSION } from "@/constant/env";
 import type { ReleaseInfo } from "@/lib/release";
 
 function readLocalReleases(): ReleaseInfo[] {
-    try {
-        return JSON.parse(process.env.NEXT_PUBLIC_APP_RELEASES || "[]");
-    } catch {
-        return [];
-    }
+    return __APP_RELEASES__ || [];
 }
 
 function toVersionParts(version: string) {

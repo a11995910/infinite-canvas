@@ -1,8 +1,11 @@
 .git
 .idea
-docs
+docs2
 data
-data_副本
+docs/.next
+docs/.source
+docs/node_modules
+docs/out
 web/.next
 web/node_modules
 web/out

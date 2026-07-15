@@ -1,7 +1,5 @@
-"use client";
-
-import { useState, type ReactNode } from "react";
-import { ConfigProvider } from "antd";
+import { type ReactNode, useState } from "react";
+import { ConfigProvider, Switch } from "antd";
 
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import type { AiConfig } from "@/stores/use-config-store";
@@ -12,25 +10,16 @@ const qualityOptions = [
     { value: "medium", label: "中" },
     { value: "low", label: "低" },
 ];
-
-const formatOptions = [
-    { value: "png", label: "PNG" },
-    { value: "jpeg", label: "JPEG" },
-    { value: "webp", label: "WebP" },
-];
-
-const moderationOptions = [
-    { value: "auto", label: "自动" },
-    { value: "low", label: "低" },
-];
+const DIMENSION_STEP = 16;
 
 const aspectOptions = [
     { value: "1:1", label: "1:1", width: 1024, height: 1024, icon: "square" },
     { value: "3:2", label: "3:2", width: 1536, height: 1024, icon: "landscape" },
     { value: "2:3", label: "2:3", width: 1024, height: 1536, icon: "portrait" },
-    { value: "4:3", label: "4:3", width: 1344, height: 1024, icon: "landscape" },
-    { value: "3:4", label: "3:4", width: 1024, height: 1344, icon: "portrait" },
-    { value: "9:16", label: "9:16", width: 1024, height: 1792, icon: "portrait" },
+    { value: "4:3", label: "4:3", width: 1360, height: 1024, icon: "landscape" },
+    { value: "3:4", label: "3:4", width: 1024, height: 1360, icon: "portrait" },
+    { value: "16:9", label: "16:9", width: 1824, height: 1024, icon: "landscape" },
+    { value: "9:16", label: "9:16", width: 1024, height: 1824, icon: "portrait" },
     { value: "1:1-2k", label: "1:1(2k)", size: "2048x2048", width: 2048, height: 2048, icon: "square" },
     { value: "16:9-2k", label: "16:9(2k)", size: "2048x1152", width: 2048, height: 1152, icon: "landscape" },
     { value: "9:16-2k", label: "9:16(2k)", size: "1152x2048", width: 1152, height: 2048, icon: "portrait" },
@@ -39,38 +28,24 @@ const aspectOptions = [
     { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
 ];
 
+export const imageQualityOptions = qualityOptions.map((item) => ({ value: item.value, label: item.label }));
+export const imageAspectOptions = aspectOptions.map((item) => ({ value: item.size || item.value, label: item.label }));
+
 type ImageSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: keyof AiConfig, value: string) => void;
+    onConfigChange: (key: "quality" | "size" | "count", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
     maxCount?: number;
     quickCount?: number;
-    collapsible?: boolean;
 };
 
-type ImageSettingSectionKey = "quality" | "size" | "aspect" | "count" | "format" | "compression" | "moderation" | "seed";
-
-const defaultCollapsedSettings: Record<ImageSettingSectionKey, boolean> = {
-    quality: false,
-    size: true,
-    aspect: true,
-    count: true,
-    format: true,
-    compression: true,
-    moderation: true,
-    seed: true,
-};
-
-export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10, collapsible = false }: ImageSettingsPanelProps) {
-    const [collapsedSettings, setCollapsedSettings] = useState(defaultCollapsedSettings);
+export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
+    const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
     const quality = config.quality || "auto";
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
-    const outputFormat = config.outputFormat || "png";
-    const outputCompression = Math.max(0, Math.min(100, Math.floor(Number(config.outputCompression) || 100)));
-    const moderation = config.moderation || "auto";
     const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
     const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
     const selectAspect = (value: string) => {
@@ -79,67 +54,53 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
     };
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
-        onConfigChange("size", `${key === "width" ? next : dimensions.width}x${key === "height" ? next : dimensions.height}`);
-    };
-    const renderSection = (key: ImageSettingSectionKey, title: string, summary: string, children: ReactNode) => {
-        if (!collapsible) {
-            return (
-                <div className="space-y-2.5">
-                    <SettingTitle color={theme.node.muted}>{title}</SettingTitle>
-                    {children}
-                </div>
-            );
-        }
-        const collapsed = collapsedSettings[key];
-        return (
-            <CollapsibleSettingGroup
-                key={key}
-                title={title}
-                summary={summary}
-                collapsed={collapsed}
-                theme={theme}
-                onToggle={() =>
-                    setCollapsedSettings((value) => ({
-                        ...value,
-                        [key]: !value[key],
-                    }))
-                }
-            >
-                {children}
-            </CollapsibleSettingGroup>
-        );
+        const width = key === "width" ? next : dimensions.width;
+        const height = key === "height" ? next : dimensions.height;
+        onConfigChange("size", `${alignDimension(width, snapDimensionToStep)}x${alignDimension(height, snapDimensionToStep)}`);
     };
 
     return (
         <ImageSettingsTheme theme={theme}>
-            <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
+            <div
+                className={className}
+                style={{ color: theme.node.text }}
+                onMouseDown={(event) => {
+                    event.stopPropagation();
+                    if (event.target instanceof HTMLInputElement) return;
+                    if (document.activeElement instanceof HTMLInputElement && event.currentTarget.contains(document.activeElement)) document.activeElement.blur();
+                }}
+            >
                 {showTitle ? <div className="text-lg font-semibold">图像设置</div> : null}
-                {renderSection(
-                    "quality",
-                    "质量",
-                    imageQualityLabel(quality),
+                <div className="space-y-2.5">
+                    <SettingTitle color={theme.node.muted}>质量</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
                         {qualityOptions.map((item) => (
                             <OptionPill key={item.value} selected={quality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
                                 {item.label}
                             </OptionPill>
                         ))}
-                    </div>,
-                )}
-                {renderSection(
-                    "size",
-                    "尺寸",
-                    activeSize === "auto" ? "auto" : `${dimensions.width || 0}x${dimensions.height || 0}`,
+                    </div>
+                </div>
+                <div className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                        <SettingTitle color={theme.node.muted}>尺寸</SettingTitle>
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium" style={{ color: theme.node.muted }}>
+                                16倍数对齐
+                            </span>
+                            <span title="输入完成后自动向上补成 16 的倍数" onMouseDown={(event) => event.stopPropagation()}>
+                                <Switch size="small" checked={snapDimensionToStep} onChange={setSnapDimensionToStep} />
+                            </span>
+                        </div>
+                    </div>
                     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
-                        <DimensionInput prefix="W" value={dimensions.width} disabled={activeSize === "auto"} theme={theme} onChange={(value) => updateDimension("width", value)} />
+                        <DimensionInput prefix="W" value={dimensions.width} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
                         <span className="text-lg opacity-45">↔</span>
-                        <DimensionInput prefix="H" value={dimensions.height} disabled={activeSize === "auto"} theme={theme} onChange={(value) => updateDimension("height", value)} />
-                    </div>,
-                )}
-                {renderSection(
-                    "aspect",
-                    "宽高比",
-                    selectedAspect?.label || activeSize,
+                        <DimensionInput prefix="H" value={dimensions.height} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
+                    </div>
+                </div>
+                <div className="space-y-2.5">
+                    <SettingTitle color={theme.node.muted}>宽高比</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
                         {aspectOptions.map((item) => (
                             <button
@@ -154,12 +115,10 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                 <span>{item.label}</span>
                             </button>
                         ))}
-                    </div>,
-                )}
-                {renderSection(
-                    "count",
-                    "生成张数",
-                    `${count} 张`,
+                    </div>
+                </div>
+                <div className="space-y-2.5">
+                    <SettingTitle color={theme.node.muted}>生成张数</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
                         {Array.from({ length: quickCount }, (_, index) => index + 1).map((value) => (
                             <OptionPill key={value} selected={count === value} theme={theme} onClick={() => onConfigChange("count", String(value))}>
@@ -167,73 +126,8 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                             </OptionPill>
                         ))}
                         <CountInput value={count} max={maxCount} theme={theme} onChange={(value) => onConfigChange("count", String(value || 1))} />
-                    </div>,
-                )}
-                {(() => {
-                    const modelLower = config.model?.toLowerCase().replace(/[\s_]+/g, "-") || "";
-                    const isAgnesModel = modelLower.startsWith("agnes-image") || modelLower.startsWith("agens-image");
-                    return isAgnesModel;
-                })() ? renderSection(
-                    "seed",
-                    "随机种子 (Seed)",
-                    config.seed ? String(config.seed) : "自适应随机",
-                    <div className="flex h-9 overflow-hidden rounded-xl border text-sm transition-all focus-within:border-current" style={{ borderColor: theme.node.stroke, background: theme.node.fill }}>
-                        <input
-                            type="text"
-                            placeholder="留空使用自适应分发算法"
-                            className="min-w-0 flex-1 bg-transparent px-3 outline-none"
-                            style={{ color: theme.node.text }}
-                            value={config.seed ?? ""}
-                            onChange={(event) => {
-                                const val = event.target.value;
-                                if (val === "" || /^-?\d*$/.test(val)) {
-                                    onConfigChange("seed", val);
-                                }
-                            }}
-                            onMouseDown={(event) => event.stopPropagation()}
-                        />
-                        {config.seed ? (
-                            <button
-                                type="button"
-                                className="grid w-9 place-items-center cursor-pointer opacity-60 hover:opacity-100"
-                                style={{ color: theme.node.text }}
-                                onClick={() => onConfigChange("seed", "")}
-                            >
-                                ✕
-                            </button>
-                        ) : null}
-                    </div>,
-                ) : null}
-                {renderSection(
-                    "format",
-                    "格式",
-                    imageFormatLabel(outputFormat),
-                    <div className="grid grid-cols-3 gap-2.5">
-                        {formatOptions.map((item) => (
-                            <OptionPill key={item.value} selected={outputFormat === item.value} theme={theme} onClick={() => onConfigChange("outputFormat", item.value)}>
-                                {item.label}
-                            </OptionPill>
-                        ))}
-                    </div>,
-                )}
-                {renderSection(
-                    "compression",
-                    "压缩",
-                    outputFormat === "png" ? "PNG 不压缩" : `${outputCompression}`,
-                    <RangeInput value={outputCompression} disabled={outputFormat === "png"} theme={theme} onChange={(value) => onConfigChange("outputCompression", String(value))} />,
-                )}
-                {renderSection(
-                    "moderation",
-                    "审核",
-                    moderation === "low" ? "低" : "自动",
-                    <div className="grid grid-cols-2 gap-2.5">
-                        {moderationOptions.map((item) => (
-                            <OptionPill key={item.value} selected={moderation === item.value} theme={theme} onClick={() => onConfigChange("moderation", item.value)}>
-                                {item.label}
-                            </OptionPill>
-                        ))}
-                    </div>,
-                )}
+                    </div>
+                </div>
             </div>
         </ImageSettingsTheme>
     );
@@ -260,10 +154,6 @@ export function imageSizeLabel(size: string) {
     return aspectOptions.find((item) => (item.size || item.value) === size || item.value === size)?.label || size;
 }
 
-export function imageFormatLabel(value: string) {
-    return ({ png: "PNG", jpeg: "JPEG", webp: "WebP" } as Record<string, string>)[value] || value;
-}
-
 function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
     return (
         <button
@@ -278,32 +168,13 @@ function OptionPill({ selected, theme, onClick, children }: { selected: boolean;
     );
 }
 
-function CollapsibleSettingGroup({ title, summary, collapsed, theme, children, onToggle }: { title: string; summary: string; collapsed: boolean; theme: CanvasTheme; children: ReactNode; onToggle: () => void }) {
-    return (
-        <section className="overflow-hidden rounded-lg border" style={{ borderColor: theme.node.stroke, background: theme.toolbar.panel }}>
-            <button type="button" className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm" style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()} onClick={onToggle}>
-                <span className="min-w-0">
-                    <span className="font-medium">{title}</span>
-                    {collapsed ? (
-                        <span className="ml-2 truncate text-xs" style={{ color: theme.node.muted }}>
-                            {summary}
-                        </span>
-                    ) : null}
-                </span>
-                <span className="shrink-0 text-xs" style={{ color: theme.node.muted }}>
-                    {collapsed ? "展开" : "收起"}
-                </span>
-            </button>
-            {!collapsed ? (
-                <div className="border-t p-3" style={{ borderColor: theme.node.stroke }}>
-                    {children}
-                </div>
-            ) : null}
-        </section>
-    );
-}
+function DimensionInput({ prefix, value, disabled, theme, alignToStep, onChange }: { prefix: string; value: number; disabled: boolean; theme: CanvasTheme; alignToStep: boolean; onChange: (value: number | null) => void }) {
+    const commit = (input: HTMLInputElement) => {
+        const next = alignDimension(Math.max(1, Math.floor(Number(input.value) || value || 1024)), alignToStep);
+        input.value = String(next);
+        onChange(next);
+    };
 
-function DimensionInput({ prefix, value, disabled, theme, onChange }: { prefix: string; value: number; disabled: boolean; theme: CanvasTheme; onChange: (value: number | null) => void }) {
     return (
         <label className="flex h-9 overflow-hidden rounded-xl text-sm" style={{ background: theme.node.fill, color: theme.node.text, opacity: disabled ? 0.55 : 1 }}>
             <span className="grid w-9 place-items-center" style={{ color: theme.node.muted }}>
@@ -314,8 +185,12 @@ function DimensionInput({ prefix, value, disabled, theme, onChange }: { prefix: 
                 min={1}
                 disabled={disabled}
                 className="min-w-0 flex-1 bg-transparent px-2 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                value={value || ""}
-                onChange={(event) => onChange(Number(event.target.value) || null)}
+                defaultValue={value || ""}
+                key={`${prefix}-${value}`}
+                onBlur={(event) => commit(event.currentTarget)}
+                onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                }}
                 onMouseDown={(event) => event.stopPropagation()}
             />
         </label>
@@ -336,37 +211,6 @@ function CountInput({ value, max, theme, onChange }: { value: number; max: numbe
                 onMouseDown={(event) => event.stopPropagation()}
             />
         </label>
-    );
-}
-
-function RangeInput({ value, disabled, theme, onChange }: { value: number; disabled: boolean; theme: CanvasTheme; onChange: (value: number) => void }) {
-    return (
-        <div className="grid grid-cols-[1fr_64px] items-center gap-2.5" style={{ opacity: disabled ? 0.55 : 1 }}>
-            <input
-                type="range"
-                min={0}
-                max={100}
-                disabled={disabled}
-                className="min-w-0 accent-current"
-                style={{ color: theme.node.activeStroke }}
-                value={value}
-                onChange={(event) => onChange(Number(event.target.value) || 0)}
-                onMouseDown={(event) => event.stopPropagation()}
-            />
-            <label className="flex h-9 overflow-hidden rounded-full border text-sm" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
-                <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    disabled={disabled}
-                    className="min-w-0 flex-1 bg-transparent px-2 text-center outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                    style={{ color: theme.node.text, WebkitTextFillColor: theme.node.text }}
-                    value={value}
-                    onChange={(event) => onChange(Math.max(0, Math.min(100, Number(event.target.value) || 0)))}
-                    onMouseDown={(event) => event.stopPropagation()}
-                />
-            </label>
-        </div>
     );
 }
 
@@ -396,4 +240,8 @@ function readSizeDimensions(size: string, fallback: { width: number; height: num
         width: match ? Number(match[1]) : fallback.width,
         height: match ? Number(match[2]) : fallback.height,
     };
+}
+
+function alignDimension(value: number, enabled: boolean) {
+    return enabled ? Math.ceil(value / DIMENSION_STEP) * DIMENSION_STEP : value;
 }

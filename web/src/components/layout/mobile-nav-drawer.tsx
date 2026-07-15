@@ -1,11 +1,9 @@
-"use client";
-
 import { Drawer } from "antd";
-import Link from "next/link";
+import { Link } from "react-router-dom";
 
 import { navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
-import { withSub2APIEmbedParams } from "@/lib/sub2api-embed";
 import { cn } from "@/lib/utils";
+import { withSub2APIEmbedParams } from "@/lib/sub2api-embed";
 
 type MobileNavDrawerProps = {
     open: boolean;
@@ -23,7 +21,7 @@ export function MobileNavDrawer({ open, activeToolSlug, onClose }: MobileNavDraw
                     return (
                         <Link
                             key={tool.slug}
-                            href={withSub2APIEmbedParams(`/${tool.slug}`)}
+                            to={withSub2APIEmbedParams(`/${tool.slug}`)}
                             onClick={onClose}
                             className={cn(
                                 "flex items-center gap-3 rounded-lg px-3 py-3 text-base transition",

@@ -1,0 +1,51 @@
+---
+title: 本地开发
+description: Vite 前端与 Go API 的本地开发方式
+---
+
+# 本地开发
+
+当前主应用由 Vite 前端和 Go API 组成。浏览器仍会直接请求用户配置的 OpenAI 兼容接口；登录、画布同步、服务端文件存储和 Sub2API 嵌入由 Go API 提供。
+
+## 1. 启动 API
+
+```bash
+cp .env.example .env
+go run .
+```
+
+API 默认监听 `http://127.0.0.1:18080`，可通过 `http://127.0.0.1:18080/api/health` 检查。
+
+## 2. 启动前端
+
+```bash
+cd web
+bun install
+bun run dev
+```
+
+前端默认访问：
+
+```text
+http://localhost:3000
+```
+
+Vite 会将 `/api/*` 代理到 `http://127.0.0.1:18080`。后端使用其他地址时，启动前端前设置 `API_BASE_URL`。
+
+## 3. 配置模型
+
+打开右上角配置弹窗，填写自己的 `Base URL`、`API Key` 和模型名。第三方提示词和 WebDAV 都由浏览器前端直连。
+
+## 4. 启动文档站
+
+如果需要单独调整文档站，在 `docs` 目录执行：
+
+```bash
+bun run dev
+```
+
+## 常见场景
+
+- 改画布、页面和交互：主要看 `web/`
+- 改提示词缓存：主要看 `web/src/services/api/prompts.ts`
+- 改文档站内容：主要看 `docs/content/docs/`
