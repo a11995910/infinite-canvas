@@ -5,7 +5,10 @@ import "streamdown/styles.css";
 import "./styles/globals.css";
 import { RouterProvider } from "react-router-dom";
 
+import { initAnalytics } from "@/lib/analytics";
 import { router } from "@/router";
+
+initAnalytics();
 
 document.body.style.fontFamily = '"SF Pro Display","SF Pro Text","PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif';
 
