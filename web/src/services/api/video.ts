@@ -64,6 +64,9 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
     assertVideoConfig(requestConfig, requestConfig.model);
     if (isSeedanceVideoConfig(requestConfig)) {
+        if (isSub2APIProxyBaseUrl(requestConfig.baseUrl)) {
+            return createSub2APISeedanceTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
+        }
         return createSeedanceTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
     }
     if (videoReferences.length || audioReferences.length) {
@@ -111,6 +114,28 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
         return { id: created.id, provider: "openai", model };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败"));
+    }
+}
+
+async function createSub2APISeedanceTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    if (videoReferences.length || audioReferences.length) {
+        throw new Error("Sub2API Seedance 当前仅支持提示词和参考图片，请移除参考视频或参考音频");
+    }
+    const imageUrls = await Promise.all(references.slice(0, SEEDANCE_REFERENCE_LIMITS.images).map(imageToDataUrl));
+    const payload = {
+        model: modelOptionName(model),
+        prompt: buildSeedancePromptText(prompt, references, [], []),
+        duration: normalizeSeedanceDuration(config.videoSeconds),
+        resolution: normalizeSeedanceResolution(config.vquality, modelOptionName(model)),
+        size: normalizeSeedanceRatio(config.size),
+        ...(imageUrls.length ? { image_urls: imageUrls } : {}),
+    };
+    try {
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
+        if (!created.id) throw new Error("Sub2API Seedance 接口没有返回任务 ID");
+        return { id: created.id, provider: "openai", model };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Sub2API Seedance 任务创建失败"));
     }
 }
 
@@ -261,6 +286,10 @@ function assertSeedanceAudioReferences(audioReferences: ReferenceAudio[]) {
 
 function seedanceApiUrl(config: AiConfig, taskId?: string) {
     return buildApiUrl(config.baseUrl, `/contents/generations/tasks${taskId ? `/${encodeURIComponent(taskId)}` : ""}`);
+}
+
+function isSub2APIProxyBaseUrl(baseUrl: string) {
+    return baseUrl.toLowerCase().includes("/api/sub2api/proxy/");
 }
 
 async function buildSeedanceContent(config: AiConfig, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
