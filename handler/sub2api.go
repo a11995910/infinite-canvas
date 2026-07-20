@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -41,6 +42,7 @@ type sub2APIEnvelope[T any] struct {
 
 type sub2APIKeysPayload struct {
 	Items []sub2APIKey `json:"items"`
+	Pages int          `json:"pages"`
 }
 
 type sub2APIUser struct {
@@ -70,20 +72,9 @@ func Sub2APIEmbedKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request, _ := http.NewRequest(http.MethodGet, origin+"/api/v1/keys?page=1&page_size=100", nil)
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", "application/json")
-	response, err := sub2APIHTTPClient.Do(request)
+	keys, status, err := fetchSub2APIKeys(r.Context(), origin, token, r.UserAgent())
 	if err != nil {
-		sub2APIError(w, http.StatusBadGateway, errors.New("读取 Sub2API Key 失败"))
-		return
-	}
-	defer response.Body.Close()
-
-	payload := sub2APIEnvelope[sub2APIKeysPayload]{}
-	_ = json.NewDecoder(response.Body).Decode(&payload)
-	if response.StatusCode < 200 || response.StatusCode >= 300 || payload.Code != 0 {
-		sub2APIError(w, response.StatusCode, errors.New(firstSub2APIString(payload.Message, payload.Msg, "读取 Sub2API Key 失败")))
+		sub2APIError(w, status, err)
 		return
 	}
 	target, expires, signature, err := signSub2APIOrigin(origin)
@@ -94,8 +85,41 @@ func Sub2APIEmbedKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"sourceOrigin": origin,
 		"proxyBaseUrl": service.RequestOrigin(r) + "/api/sub2api/proxy/" + target + "/" + expires + "/" + signature,
-		"keys":         payload.Data.Items,
+		"keys":         keys,
 	})
+}
+
+func fetchSub2APIKeys(ctx context.Context, origin, token, userAgent string) ([]sub2APIKey, int, error) {
+	const pageSize = 1000
+	keys := make([]sub2APIKey, 0)
+
+	for page := 1; ; page++ {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/api/v1/keys?page="+strconv.Itoa(page)+"&page_size="+strconv.Itoa(pageSize), nil)
+		if err != nil {
+			return nil, http.StatusBadGateway, errors.New("读取 Sub2API Key 失败")
+		}
+		setSub2APIAuthHeaders(request, token, userAgent)
+
+		response, err := sub2APIHTTPClient.Do(request)
+		if err != nil {
+			return nil, http.StatusBadGateway, errors.New("读取 Sub2API Key 失败")
+		}
+		payload := sub2APIEnvelope[sub2APIKeysPayload]{}
+		decodeErr := json.NewDecoder(response.Body).Decode(&payload)
+		response.Body.Close()
+		if decodeErr != nil || response.StatusCode < 200 || response.StatusCode >= 300 || payload.Code != 0 {
+			status := response.StatusCode
+			if status < 400 || status > 599 {
+				status = http.StatusBadGateway
+			}
+			return nil, status, errors.New(firstSub2APIString(payload.Message, payload.Msg, "读取 Sub2API Key 失败"))
+		}
+
+		keys = append(keys, payload.Data.Items...)
+		if payload.Data.Pages <= page || len(payload.Data.Items) == 0 {
+			return keys, http.StatusOK, nil
+		}
+	}
 }
 
 // Sub2APIEmbedSession 校验 Sub2API 当前用户后创建画布登录会话。
@@ -111,9 +135,12 @@ func Sub2APIEmbedSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request, _ := http.NewRequest(http.MethodGet, origin+"/api/v1/auth/me", nil)
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", "application/json")
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, origin+"/api/v1/auth/me", nil)
+	if err != nil {
+		sub2APIError(w, http.StatusBadGateway, errors.New("Sub2API 登录状态无效"))
+		return
+	}
+	setSub2APIAuthHeaders(request, token, r.UserAgent())
 	response, err := sub2APIHTTPClient.Do(request)
 	if err != nil {
 		sub2APIError(w, http.StatusBadGateway, errors.New("Sub2API 登录状态无效"))
@@ -217,7 +244,7 @@ func signSub2APIOrigin(origin string) (string, string, string, error) {
 	target := base64.RawURLEncoding.EncodeToString([]byte(origin))
 	ttl := config.Cfg.Sub2APIEmbedTTL
 	if ttl <= 0 {
-		ttl = 86400
+		ttl = 604800
 	}
 	expires := time.Now().Add(time.Duration(ttl) * time.Second).Unix()
 	return target, int64String(expires), sub2APISignature(origin, expires, secret), nil
@@ -289,6 +316,14 @@ func bearerToken(r *http.Request) string {
 		return strings.TrimSpace(value[7:])
 	}
 	return ""
+}
+
+func setSub2APIAuthHeaders(request *http.Request, token, userAgent string) {
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Accept", "application/json")
+	if userAgent = strings.TrimSpace(userAgent); userAgent != "" {
+		request.Header.Set("User-Agent", userAgent)
+	}
 }
 
 func sub2APIError(w http.ResponseWriter, status int, err error) {

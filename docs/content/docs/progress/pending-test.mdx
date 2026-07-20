@@ -8,10 +8,11 @@ description: 当前版本已实现但仍需人工验证的变更项
 - Vite 与 Go API 联动：本地启动 Go 服务和 Vite 后，登录、画布同步、服务端文件接口及 `/api/health` 均应通过 Vite 代理可用；Docker 容器中 Nginx 的 `/api/*` 反代应保持相同行为。
 - Vite 路由启动：首页、视频页和登录页应正常渲染，控制台不应出现 `useLocation()` 缺少 Router 上下文的错误。
 - Linux.do 登录：第三方回调返回 `/login?token=...` 后，Vite 登录页应读取令牌、获取当前用户并跳转回原页面。
-- Sub2API iframe 嵌入：允许来源、有效登录令牌和有效 Key 下应自动创建画布会话并按图片、文本、视频填充渠道；来源不在白名单、令牌失效、签名过期和内网来源未显式允许时应给出对应失败提示。
+- Sub2API iframe 嵌入：允许来源、有效登录令牌和有效 Key 下应自动创建画布会话，并为全部活跃的 OpenAI、Gemini、Grok Key 创建独立渠道、读取各自模型列表；登录校验与 Key 拉取必须透传嵌入浏览器 User-Agent，不应因上游会话指纹校验返回 401。生图和文本下拉应展示对应能力的全部可用模型，视频下拉应展示当前网关支持的视频模型，同名模型需以渠道与 Key 名区分，切换后请求必须携带所选渠道的 Key。图片下拉只应包含分组已启用图片生成权限的 Key；单把 Key 的模型读取失败不应阻断其余 Key 注入，失效 Key、未知平台 Key、旧嵌入渠道和已删除 Key 不应残留。来源不在白名单、令牌失效、签名过期和内网来源未显式允许时应给出对应失败提示；默认代理签名有效期为 7 天；超过 1000 把 Key 时需确认分页完整读取。
+- 配置与用户偏好：渠道编辑器可为每个模型指定生图、视频、文本或音频能力，各处模型下拉只能显示对应能力模型；例如生图下拉不应出现视频、文本或音频模型，同名模型仍应显示渠道名。
 - Sub2API HTTPS 嵌入：从 HTTPS Sub2API 页面进入时，图片、视频和文本渠道的代理 Base URL 必须使用 `https://`，浏览器控制台不应出现 Mixed Content 拦截。
 - Sub2API 生成代理：图片、文本和视频请求在上游首包等待 60 秒以上时不应被画布内层代理中断；大于 1MB 的参考图编辑请求应能够通过代理到达上游。
-- Sub2API Grok 视频：Grok 分组且具备图片生成权限的 Key 应自动配置 `grok-imagine-video-1.5` 视频模型；生成请求应使用 `/v1/videos/generations`，随后按 `request_id` 查询 `/v1/videos/{request_id}` 并保存 `video.url`。视频设置应显示 480p、720p、1080p 和 1-15 秒，1080p 仅在 `grok-imagine-video-1.5` 且添加 1 张首帧图时可提交。超过 1 MiB 的图片参考素材会在浏览器提交前等比压缩为小于 1 MiB 的 JPEG 临时数据，不改变画布或本地保存的原图；需分别在视频工作台和画布用超限图片验证。
+- Sub2API Grok 视频：Grok Key 的实际模型列表包含 `grok-imagine-video-1.5` 时，视频下拉应显示该模型并使用对应 Key 提交；生成请求应使用 `/v1/videos/generations`，随后按 `request_id` 查询 `/v1/videos/{request_id}` 并保存 `video.url`。视频设置应显示 480p、720p、1080p 和 1-15 秒，1080p 仅在 `grok-imagine-video-1.5` 且添加 1 张首帧图时可提交。超过 1 MiB 的图片参考素材会在浏览器提交前等比压缩为小于 1 MiB 的 JPEG 临时数据，不改变画布或本地保存的原图；需分别在视频工作台和画布用超限图片验证。
 - 提示词库图片：同步上游 README 时应同时解析 HTML `<img>` 和 Markdown 图片，封面与详情预览需能解析相对路径；升级后本地提示词缓存应自动刷新，需验证 `awesome-gpt4o-image-prompts`、`youmind-gpt-image-2` 和 `youmind-nano-banana-pro` 分类的图片均正常显示。
 - Sub2API Seedance 视频：选择 `dreamina-seedance-*` 模型时应以 JSON 请求 `/v1/videos`，携带时长、清晰度、画幅和参考图片，随后查询 `/v1/videos/{id}`；不得误请求火山方舟 `/contents/generations/tasks`。
 - OpenAI 兼容渠道：Base URL 支持填写站点根地址、以 `/v1` 结尾的 OpenAI Base URL、`llms.txt` / `llms-full.txt` 文档地址，以及误填的 `/v1/models`、`/v1/images/generations`、`/v1/images/edits` 等完整接口地址；需使用 `https://api.skylee9.cloudns.ch`、`https://api.skylee9.cloudns.ch/v1` 和 `https://api.skylee9.cloudns.ch/llms.txt` 分别拉取模型，并用 `gpt-image-2` 验证文生图和图生图均请求到正确的 `/v1` JSON 接口。

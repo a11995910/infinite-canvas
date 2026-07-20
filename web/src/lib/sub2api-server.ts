@@ -3,7 +3,7 @@ import { isIP } from "net";
 
 import type { NextRequest } from "next/server";
 
-const DEFAULT_SIGNATURE_TTL_SECONDS = 24 * 60 * 60;
+const DEFAULT_SIGNATURE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PRIVATE_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
 
 export function normalizeSub2APIOrigin(value: string | null) {

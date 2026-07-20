@@ -24,7 +24,7 @@ type Config struct {
 	Sub2APIEmbedSecret  string `env:"SUB2API_EMBED_PROXY_SECRET"`
 	Sub2APIEmbedOrigins string `env:"SUB2API_EMBED_ALLOWED_ORIGINS"`
 	Sub2APIEmbedPrivate bool   `env:"SUB2API_EMBED_ALLOW_PRIVATE_HOSTS" envDefault:"false"`
-	Sub2APIEmbedTTL     int    `env:"SUB2API_EMBED_PROXY_TTL_SECONDS" envDefault:"86400"`
+	Sub2APIEmbedTTL     int    `env:"SUB2API_EMBED_PROXY_TTL_SECONDS" envDefault:"604800"`
 }
 
 var Cfg Config
