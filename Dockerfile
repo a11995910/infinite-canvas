@@ -32,7 +32,8 @@ WORKDIR /app
 COPY --from=api-build /server /app/server
 COPY --from=web-build /app/web/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-RUN mkdir -p /app/data/prompts /app/data/logs/ai-calls
+COPY web/docker-entrypoint.sh /docker-entrypoint.d/40-runtime-config.sh
+RUN mkdir -p /app/data/prompts /app/data/logs/ai-calls && chmod +x /docker-entrypoint.d/40-runtime-config.sh
 
 EXPOSE 3000
 CMD ["sh", "-c", "PORT=18080 /app/server & exec nginx -g 'daemon off;'"]

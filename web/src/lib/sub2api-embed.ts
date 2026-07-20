@@ -104,9 +104,6 @@ export function buildSub2APIEmbedConfig(config: AiConfig, payload: Sub2APIEmbedC
         imageModel: resolveRoleModel(config.imageModel, imageOptions),
         textModel: resolveRoleModel(config.textModel, textOptions),
         videoModel: videoOptions.length ? resolveRoleModel(config.videoModel, videoOptions) : replaceEmbedModel(config.videoModel, []),
-        imageModels: mergeRoleOptions(config.imageModels, imageOptions),
-        textModels: mergeRoleOptions(config.textModels, textOptions),
-        videoModels: videoOptions.length ? mergeRoleOptions(config.videoModels, videoOptions) : config.videoModels.filter((model) => !isEmbedModel(model)),
     };
 }
 
@@ -122,9 +119,6 @@ export function clearSub2APIEmbedConfig(config: AiConfig): AiConfig {
         imageModel: replaceEmbedModel(config.imageModel, fallbackOptions),
         textModel: replaceEmbedModel(config.textModel, fallbackOptions),
         videoModel: replaceEmbedModel(config.videoModel, fallbackOptions),
-        imageModels: config.imageModels.filter((model) => !isEmbedModel(model)),
-        textModels: config.textModels.filter((model) => !isEmbedModel(model)),
-        videoModels: config.videoModels.filter((model) => !isEmbedModel(model)),
     };
 }
 
@@ -135,7 +129,7 @@ export function hasSub2APIEmbedChannel(config: AiConfig, payload: Sub2APIEmbedCo
     return requiredIds.every((id) => {
         const channel = config.channels.find((item) => item.id === id);
         if (channel?.baseUrl !== payload.proxyBaseUrl) return false;
-        if (id === SUB2API_EMBED_VIDEO_CHANNEL_ID) return videoKeys.has(channel.apiKey) && channel.models.includes(SUB2API_EMBED_MODEL_FALLBACKS.video[0]);
+        if (id === SUB2API_EMBED_VIDEO_CHANNEL_ID) return videoKeys.has(channel.apiKey) && channel.models.some((model) => model.name === SUB2API_EMBED_MODEL_FALLBACKS.video[0]);
         return keys.has(channel.apiKey);
     });
 }
@@ -168,20 +162,16 @@ function buildSub2APIEmbedChannel(payload: Sub2APIEmbedConfig, role: Sub2APIEmbe
         baseUrl: payload.proxyBaseUrl,
         apiKey: selectedKey.key,
         apiFormat: "openai",
-        models: models?.length ? models : SUB2API_EMBED_MODEL_FALLBACKS[role],
+        models: (models?.length ? models : SUB2API_EMBED_MODEL_FALLBACKS[role]).map((name) => ({ name, capability: role === "text" ? "text" : role })),
     };
 }
 
 function optionsForChannel(channel?: ModelChannel) {
-    return channel ? channel.models.map((model) => encodeChannelModel(channel.id, model)) : [];
+    return channel ? channel.models.map((model) => encodeChannelModel(channel.id, model.name)) : [];
 }
 
 function resolveRoleModel(current: string, options: string[]) {
     return options.includes(current) ? current : options[0] || current;
-}
-
-function mergeRoleOptions(current: string[], options: string[]) {
-    return [...options, ...current.filter((model) => !isEmbedModel(model))];
 }
 
 function replaceEmbedModel(current: string, fallback: string[]) {
