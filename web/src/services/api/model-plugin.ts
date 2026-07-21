@@ -4,6 +4,8 @@ import { buildApiUrl, type AiConfig, type ModelCapability } from "@/stores/use-c
 
 type RequestOptions = { signal?: AbortSignal };
 
+const MODEL_API_TIMEOUT_MS = 600_000;
+
 export type PluginHttpOptions = {
     headers?: Record<string, string>;
     params?: Record<string, unknown>;
@@ -52,6 +54,7 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHtt
             headers: pluginHeaders({ Authorization: `Bearer ${config.apiKey}`, ...opts?.headers }, method === "post" && !isForm && body !== undefined),
             responseType: opts?.responseType || "json",
             signal: options?.signal,
+            timeout: MODEL_API_TIMEOUT_MS,
         });
         return response.data;
     };
@@ -65,7 +68,7 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHtt
 /** Raw request with no automatic auth header — the script controls method, url, headers, body entirely. */
 function createPluginRequest(config: AiConfig, options?: RequestOptions) {
     return async (requestConfig: AxiosRequestConfig & { url: string }) => {
-        const response = await axios.request({ ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal });
+        const response = await axios.request({ timeout: MODEL_API_TIMEOUT_MS, ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal });
         return response.data;
     };
 }
@@ -91,7 +94,7 @@ function sleep(ms: number, signal?: AbortSignal) {
 function createPoll(signal?: AbortSignal) {
     return async function poll<T, R>(request: () => Promise<T>, extract: (value: T) => R | null | undefined | false, options?: PluginPollOptions): Promise<R> {
         const intervalMs = options?.intervalMs ?? 2500;
-        const timeoutMs = options?.timeoutMs ?? 300000;
+        const timeoutMs = options?.timeoutMs ?? MODEL_API_TIMEOUT_MS;
         const deadline = performance.now() + timeoutMs;
         for (;;) {
             if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -256,7 +259,7 @@ const task = await request({
 return await poll(
   () => request({ method: "get", url: \`\${baseUrl}/v1/videos/\${task.id}\`, headers }),
   (state) => state.status === "completed" ? { url: state.video_url || state.url } : null,
-  { intervalMs: 2500, timeoutMs: 300000 },
+  { intervalMs: 2500, timeoutMs: 600000 },
 );`,
         },
         {
@@ -281,7 +284,7 @@ return await poll(
     if (!uri) throw new Error("Gemini 未返回视频 URI");
     return { url: uri.includes("key=") ? uri : \`\${uri}\${uri.includes("?") ? "&" : "?"}key=\${apiKey}\` };
   },
-  { intervalMs: 5000, timeoutMs: 300000 },
+  { intervalMs: 5000, timeoutMs: 600000 },
 );`,
         },
     ],

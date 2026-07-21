@@ -35,7 +35,7 @@ import { Minimap } from "@/components/canvas/canvas-mini-map";
 import { CanvasNode } from "@/components/canvas/canvas-node";
 import { CanvasNodePromptPanel, type CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import { CanvasToolbar } from "@/components/canvas/canvas-toolbar";
-import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
+import { AssetPickerModal, type ImageAssetPayload, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
 import { useAgentStore } from "@/stores/use-agent-store";
@@ -220,6 +220,7 @@ function InfiniteCanvasPage() {
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
+    const [referencePickerNodeId, setReferencePickerNodeId] = useState<string | null>(null);
     const [projectLoaded, setProjectLoaded] = useState(false);
     const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
     const [nodeImageSettingsOpen, setNodeImageSettingsOpen] = useState(false);
@@ -2060,7 +2061,7 @@ function InfiniteCanvasPage() {
                         isImageNode && sourceNode?.metadata?.content
                             ? [{ id: sourceNode.id, name: `${sourceNode.title || sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
                             : [];
-                    const referenceImages = sourceReference.length ? sourceReference : generationContext.referenceImages;
+                    const referenceImages = [...sourceReference, ...generationContext.referenceImages.filter((image) => !sourceReference.some((source) => source.id === image.id || (source.storageKey && source.storageKey === image.storageKey)))];
                     const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
                     const generationMetadata = buildImageGenerationMetadata(generationType, generationConfig, count, referenceImages);
                     const parentConfig = NODE_DEFAULT_SIZE[isConfigNode ? CanvasNodeType.Config : isImageNode ? CanvasNodeType.Image : CanvasNodeType.Text];
@@ -2635,6 +2636,80 @@ function InfiniteCanvasPage() {
         [insertAssistantImage, insertAssistantText, screenToCanvas, size.height, size.width],
     );
 
+    const handleReferenceAssetInsert = useCallback(
+        (payloads: ImageAssetPayload[]) => {
+            const target = referencePickerNodeId ? nodesRef.current.find((node) => node.id === referencePickerNodeId) : null;
+            if (!target) {
+                setReferencePickerNodeId(null);
+                return;
+            }
+
+            const connectedImageNodes = connectionsRef.current
+                .filter((connection) => connection.toNodeId === target.id)
+                .map((connection) => nodesRef.current.find((node) => node.id === connection.fromNodeId))
+                .filter((node): node is CanvasNodeData => node?.type === CanvasNodeType.Image && Boolean(node.metadata?.content));
+            const existingKeys = new Set(connectedImageNodes.flatMap((node) => [node.metadata?.storageKey, node.metadata?.content].filter((value): value is string => Boolean(value))));
+            const uniquePayloads = payloads.filter((payload) => {
+                const keys = [payload.storageKey, payload.dataUrl].filter((value): value is string => Boolean(value));
+                if (keys.some((key) => existingKeys.has(key))) return false;
+                keys.forEach((key) => existingKeys.add(key));
+                return true;
+            });
+
+            if (!uniquePayloads.length) {
+                message.warning("所选图片已添加为参考图");
+                setReferencePickerNodeId(null);
+                return;
+            }
+
+            const centerY = target.position.y + target.height / 2;
+            const referenceNodes = uniquePayloads.map((payload, index): CanvasNodeData => {
+                const slot = connectedImageNodes.length + index;
+                const column = Math.floor(slot / 3);
+                const row = slot % 3;
+                const nodeSize = fitNodeSize(payload.width || 180, payload.height || 120, 180, 120);
+                return {
+                    id: `image-${Date.now()}-${nanoid(5)}`,
+                    type: CanvasNodeType.Image,
+                    title: payload.title || "参考图",
+                    position: {
+                        x: target.position.x - 72 - (column + 1) * 204 + (180 - nodeSize.width) / 2,
+                        y: centerY + (row - 1) * 144 - nodeSize.height / 2,
+                    },
+                    width: nodeSize.width,
+                    height: nodeSize.height,
+                    metadata: {
+                        content: payload.dataUrl,
+                        storageKey: payload.storageKey,
+                        status: NODE_STATUS_SUCCESS,
+                        naturalWidth: payload.width,
+                        naturalHeight: payload.height,
+                        bytes: payload.bytes,
+                        mimeType: payload.mimeType,
+                    },
+                };
+            });
+            const referenceTokens = referenceNodes.map((node) => `@[node:${node.id}]`).join(" ");
+            const nextNodes = nodesRef.current
+                .map((node) =>
+                    node.id === target.id && node.metadata?.composerContent?.trim()
+                        ? { ...node, metadata: { ...node.metadata, composerContent: `${node.metadata.composerContent.trimEnd()}\n参考图：${referenceTokens}` } }
+                        : node,
+                )
+                .concat(referenceNodes);
+            const nextConnections = connectionsRef.current.concat(referenceNodes.map((node) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: target.id })));
+            nodesRef.current = nextNodes;
+            connectionsRef.current = nextConnections;
+            setNodes(nextNodes);
+            setConnections(nextConnections);
+            setSelectedNodeIds(new Set(referenceNodes.map((node) => node.id)));
+            setSelectedConnectionId(null);
+            setReferencePickerNodeId(null);
+            message.success(`已添加 ${referenceNodes.length} 张参考图`);
+        },
+        [message, referencePickerNodeId],
+    );
+
     // --- 传给 CanvasNode 的回调/渲染函数统一 memo 化 ---
     // CanvasNode 是 React.memo,但只要这些 prop 每次渲染都是新引用,memo 就失效,
     // 导致点击/悬停/移动视角时全部节点跟着重渲染(markdown 尤其明显)。全部 useCallback 后,
@@ -2674,6 +2749,7 @@ function InfiniteCanvasPage() {
                     onConfigChange={handleConfigNodeChange}
                     onGenerate={handleGenerateNode}
                     onStop={confirmStopGeneration}
+                    onAddReferenceImages={setReferencePickerNodeId}
                     modeOverride={getNodeDefinition(panelNode.type)?.useBuiltinPanel?.mode}
                     onImageSettingsOpenChange={(open) => {
                         setNodeImageSettingsOpen(open);
@@ -2692,6 +2768,7 @@ function InfiniteCanvasPage() {
                 inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
                 onConfigChange={handleConfigNodeChange}
                 onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
+                onAddReferenceImages={setReferencePickerNodeId}
                 onStop={confirmStopGeneration}
                 onGenerate={(nodeId) => {
                     const target = nodesRef.current.find((item) => item.id === nodeId);
@@ -2980,7 +3057,16 @@ function InfiniteCanvasPage() {
                     <p className="text-sm opacity-60">这会删除当前画布上的所有节点和连线。</p>
                 </Modal>
 
-                <AssetPickerModal open={assetPickerOpen} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
+                <AssetPickerModal
+                    open={assetPickerOpen || Boolean(referencePickerNodeId)}
+                    mode={referencePickerNodeId ? "select-images" : "insert"}
+                    onInsert={handleAssetInsert}
+                    onSelectImages={handleReferenceAssetInsert}
+                    onClose={() => {
+                        setAssetPickerOpen(false);
+                        setReferencePickerNodeId(null);
+                    }}
+                />
             </section>
         </main>
     );
