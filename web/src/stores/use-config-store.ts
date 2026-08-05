@@ -179,7 +179,8 @@ export function resolveVideoModel(config: Pick<AiConfig, "model" | "videoModel">
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
     if (!capability) return config.models;
-    return config.channels.flatMap((channel) => channel.models.filter((model) => model.capability === capability).map((model) => encodeChannelModel(channel.id, model.name)));
+    const selectable = new Set(config.models);
+    return config.channels.flatMap((channel) => channel.models.filter((model) => model.capability === capability).map((model) => encodeChannelModel(channel.id, model.name))).filter((model) => selectable.has(model));
 }
 
 /** The user script (if any) attached to a model; empty string means use the system default call. */

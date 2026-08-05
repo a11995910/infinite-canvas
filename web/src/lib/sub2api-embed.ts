@@ -95,7 +95,7 @@ export function createSub2APIEmbedChannel(key: Sub2APIEmbedKey, proxyBaseUrl: st
 export function buildSub2APIEmbedConfig(config: AiConfig, payload: Sub2APIEmbedConfig): AiConfig {
     const embedChannels = payload.keyChannels.map(({ key, models }) => createSub2APIEmbedChannel(key, payload.proxyBaseUrl, models));
     const channels = [...embedChannels, ...config.channels.filter((channel) => !isSub2APIEmbedChannelId(channel.id))];
-    const models = modelOptionsFromChannels(channels);
+    const models = modelOptionsFromChannels(embedChannels);
     const nextConfig = { ...config, channels, models };
 
     return {

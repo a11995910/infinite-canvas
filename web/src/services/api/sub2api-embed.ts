@@ -39,17 +39,24 @@ type Sub2APISupportedModel = {
     group_ids?: number[];
 };
 
-type Sub2APIAvailableChannel = {
-    platforms?: Array<{
-        platform: string;
-        groups?: Sub2APIAvailableGroup[];
-        supported_models?: Sub2APISupportedModel[];
-    }>;
+type Sub2APIPlatformSection = {
+    platform: string;
+    groups?: Sub2APIAvailableGroup[];
+    supported_models?: Sub2APISupportedModel[];
 };
 
-type Sub2APIVideoPriceCatalog = {
+type Sub2APIAvailableChannel = {
+    platforms?: Sub2APIPlatformSection[];
+};
+
+type Sub2APIModelCatalog = {
     channels: Sub2APIAvailableChannel[];
     groupRates: Record<string, number>;
+};
+
+type Sub2APIModelContext = {
+    model: Sub2APISupportedModel;
+    group?: Sub2APIAvailableGroup;
 };
 
 const MAX_PARALLEL_MODEL_REQUESTS = 6;
@@ -68,8 +75,8 @@ export async function fetchSub2APIEmbedConfig(params: { token: string; srcHost: 
 
     const [results, priceCatalog] = await Promise.all([
         fetchSub2APIKeyModels(activeKeys, data.proxyBaseUrl),
-        fetchSub2APIVideoPriceCatalog(data.proxyBaseUrl, params.token).catch((error) => {
-            console.warn("Sub2API 视频价格读取失败", error);
+        fetchSub2APIModelCatalog(data.proxyBaseUrl, params.token).catch((error) => {
+            console.warn("Sub2API 模型分组与价格读取失败", error);
             return null;
         }),
     ]);
@@ -83,23 +90,31 @@ export async function fetchSub2APIEmbedConfig(params: { token: string; srcHost: 
     return { sourceOrigin: data.sourceOrigin, proxyBaseUrl: data.proxyBaseUrl, keys, keyChannels };
 }
 
-function buildSub2APIChannelModels(key: Sub2APIEmbedKey, names: string[], catalog: Sub2APIVideoPriceCatalog | null): ChannelModel[] {
-    return names.map((name) => {
+function buildSub2APIChannelModels(key: Sub2APIEmbedKey, names: string[], catalog: Sub2APIModelCatalog | null): ChannelModel[] {
+    return names.flatMap((name) => {
         const capability = guessCapability(name);
+        if (capability === "video" && catalog && !findSub2APIModelContext(key, name, catalog)) return [];
         const price = capability === "video" && catalog ? resolveSub2APIVideoPrice(key, name, catalog) : undefined;
-        return { name, capability, price };
+        return [{ name, capability, price }];
     });
 }
 
-function resolveSub2APIVideoPrice(key: Sub2APIEmbedKey, modelName: string, catalog: Sub2APIVideoPriceCatalog): ModelPrice | undefined {
+function findSub2APIModelContext(key: Sub2APIEmbedKey, modelName: string, catalog: Sub2APIModelCatalog): Sub2APIModelContext | undefined {
     const platformName = key.group?.platform?.trim().toLowerCase();
     const platforms = catalog.channels.flatMap((channel) => channel.platforms || []).filter((platform) => platform.platform?.trim().toLowerCase() === platformName);
     const models = platforms.flatMap((platform) => platform.supported_models || []).filter((model) => model.name === modelName);
-    const model = models.find((item) => key.group_id && item.group_ids?.includes(key.group_id)) || models[0];
-    if (!model || model.pricing?.billing_mode === "token") return undefined;
-
     const groups = platforms.flatMap((platform) => platform.groups || []);
-    const group = groups.find((item) => item.id === key.group_id) || groups.find((item) => item.name === key.group?.name) || groups.find((item) => model.group_ids?.includes(item.id));
+    const keyGroup = groups.find((item) => item.id === key.group_id) || groups.find((item) => item.name === key.group?.name);
+    const groupId = key.group_id || keyGroup?.id;
+    const model = (groupId ? models.find((item) => item.group_ids?.includes(groupId)) : undefined) || models.find((item) => !Array.isArray(item.group_ids));
+    if (!model) return undefined;
+    return { model, group: keyGroup || groups.find((item) => model.group_ids?.includes(item.id)) };
+}
+
+function resolveSub2APIVideoPrice(key: Sub2APIEmbedKey, modelName: string, catalog: Sub2APIModelCatalog): ModelPrice | undefined {
+    const context = findSub2APIModelContext(key, modelName, catalog);
+    if (!context || context.model.pricing?.billing_mode === "token") return undefined;
+    const { model, group } = context;
     const resolution = videoModelResolution(modelName);
     const resolutionPrice = resolution ? videoResolutionPrice(group, resolution) : undefined;
     const intervalPrice = resolution ? model.pricing?.intervals?.find((interval) => interval.tier_label?.trim().toLowerCase() === resolution)?.per_request_price : undefined;
@@ -129,7 +144,7 @@ function finiteNonNegative(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-async function fetchSub2APIVideoPriceCatalog(proxyBaseUrl: string, token: string): Promise<Sub2APIVideoPriceCatalog> {
+async function fetchSub2APIModelCatalog(proxyBaseUrl: string, token: string): Promise<Sub2APIModelCatalog> {
     const [channels, rates] = await Promise.all([fetchSub2APIData<Sub2APIAvailableChannel[]>(proxyBaseUrl, "/api/v1/channels/available", token), fetchSub2APIData<Record<string, number>>(proxyBaseUrl, "/api/v1/groups/rates", token).catch(() => ({}))]);
     return { channels: Array.isArray(channels) ? channels : [], groupRates: rates || {} };
 }
