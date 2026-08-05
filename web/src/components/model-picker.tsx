@@ -3,7 +3,7 @@ import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { modelCapabilityOf, modelOptionLabel, modelOptionName, modelPriceOf, selectableModelsByCapability, type AiConfig, type ModelCapability, type ModelPrice } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -50,14 +50,14 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 )}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
-                title={current ? modelOptionLabel(config, current) : placeholder}
+                title={current ? modelPickerLabel(config, current) : placeholder}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelOptionLabel(config, current) : placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelPickerLabel(config, current) : placeholder}</span>
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
-                className="z-[1200] w-80 max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
+                className="z-[1200] w-96 max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
                 position="popper"
                 align="start"
                 side="bottom"
@@ -67,7 +67,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
             >
                 {options.length ? (
                     options.map((model) => (
-                        <SelectItem key={model} value={model} textValue={modelOptionLabel(config, model)}>
+                        <SelectItem key={model} value={model} textValue={modelPickerLabel(config, model)}>
                             <ModelLabel config={config} model={model} />
                         </SelectItem>
                     ))
@@ -91,9 +91,20 @@ function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
-            <span className="truncate">{modelOptionLabel(config, model)}</span>
+            <span className="truncate">{modelPickerLabel(config, model)}</span>
         </span>
     );
+}
+
+const priceFormatter = new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+
+function modelPickerLabel(config: AiConfig, model: string) {
+    const price = modelCapabilityOf(config, model) === "video" ? modelPriceOf(config, model) : undefined;
+    return price ? `${modelOptionName(model)}（${formatModelPrice(price)}）` : modelOptionLabel(config, model);
+}
+
+function formatModelPrice(price: ModelPrice) {
+    return `${priceFormatter.format(price.amount)} 灵石/${price.unit === "second" ? "秒" : "条"}`;
 }
 
 function ModelIcon({ model }: { model: string }) {

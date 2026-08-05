@@ -5,11 +5,16 @@ import { nanoid } from "nanoid";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
+export type ModelPrice = {
+    amount: number;
+    unit: "item" | "second";
+};
 
 export type ChannelModel = {
     name: string;
     capability: ModelCapability;
     script?: string;
+    price?: ModelPrice;
 };
 
 export type ModelChannel = {
@@ -159,6 +164,10 @@ export function modelCapabilityOf(config: AiConfig, value: string): ModelCapabil
     return findChannelModel(config, value)?.model.capability;
 }
 
+export function modelPriceOf(config: AiConfig, value: string): ModelPrice | undefined {
+    return findChannelModel(config, value)?.model.price;
+}
+
 export function modelMatchesCapability(config: AiConfig, value: string, capability?: ModelCapability) {
     if (!capability) return true;
     return modelCapabilityOf(config, value) === capability;
@@ -269,7 +278,8 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         seen.add(name);
         const capability = typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name);
         const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
-        result.push({ name, capability, script });
+        const price = typeof item !== "string" && Number.isFinite(item.price?.amount) && item.price!.amount >= 0 && (item.price?.unit === "item" || item.price?.unit === "second") ? { amount: item.price.amount, unit: item.price.unit } : undefined;
+        result.push({ name, capability, script, price });
     }
     return result;
 }

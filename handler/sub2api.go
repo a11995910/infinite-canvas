@@ -22,10 +22,11 @@ import (
 )
 
 type sub2APIKey struct {
-	ID     int    `json:"id"`
-	Key    string `json:"key"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	ID      int    `json:"id"`
+	GroupID int    `json:"group_id"`
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
 	Group  *struct {
 		Name                 string `json:"name"`
 		Platform             string `json:"platform"`
@@ -84,7 +85,7 @@ func Sub2APIEmbedKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"sourceOrigin": origin,
-		"proxyBaseUrl": service.RequestOrigin(r) + "/api/sub2api/proxy/" + target + "/" + expires + "/" + signature,
+		"proxyBaseUrl": "/api/sub2api/proxy/" + target + "/" + expires + "/" + signature,
 		"keys":         keys,
 	})
 }

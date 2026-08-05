@@ -117,7 +117,7 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
     }
     const formData = new FormData();
     formData.append("file", blob, `image-${nanoid()}.${imageExtension(blob.type)}`);
-    if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
+    if (userProvider) formData.append("provider", JSON.stringify(toUserStorageProviderPayload(userProvider)));
     const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) {
@@ -254,7 +254,7 @@ export function saveUserStorageProvider(provider: UserStorageProvider) {
     window.localStorage.setItem(USER_STORAGE_PROVIDER_KEY, JSON.stringify({ ...defaultUserStorageProvider(), ...provider }));
 }
 
-function toProviderPayload(provider: UserStorageProvider) {
+export function toUserStorageProviderPayload(provider: UserStorageProvider) {
     return {
         name: provider.name,
         type: provider.type || "s3",
@@ -278,7 +278,7 @@ async function deleteServerImage(storageKey: string) {
     const response = await fetch(`/api/v1/files/${encodeURIComponent(id)}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(provider ? { provider: toProviderPayload(provider) } : {}),
+        body: JSON.stringify(provider ? { provider: toUserStorageProviderPayload(provider) } : {}),
     });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string } | null;
     if (!response.ok || payload?.code !== 0) throw new Error(payload?.msg || "删除服务端图片失败");

@@ -114,7 +114,7 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
             label: "视频创作台",
             emptyData: { logs: [] },
             localData: async () => ({ logs: await readStoredLogs(videoLogStore) }),
-            mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
+            mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "updatedAt") }),
             applyData: async (data) => replaceStoredLogs(videoLogStore, data.logs),
         }),
     ]);
@@ -292,6 +292,7 @@ async function replaceStoredLogs(store: LogStore, logs: StoredLog[]) {
 }
 
 function mergeById<T extends { id?: string }>(local: T[], remote: T[], timeKey: string) {
+    const itemTime = (item: T) => getTime(item as Record<string, unknown>, timeKey) || getTime(item as Record<string, unknown>, "createdAt");
     const items = new Map<string, T>();
     remote.forEach((item) => {
         const id = item.id || "";
@@ -301,9 +302,9 @@ function mergeById<T extends { id?: string }>(local: T[], remote: T[], timeKey: 
         const id = item.id || "";
         if (!id) return;
         const current = items.get(id);
-        if (!current || getTime(item as Record<string, unknown>, timeKey) >= getTime(current as Record<string, unknown>, timeKey)) items.set(id, item);
+        if (!current || itemTime(item) >= itemTime(current)) items.set(id, item);
     });
-    return Array.from(items.values()).sort((a, b) => getTime(b as Record<string, unknown>, timeKey) - getTime(a as Record<string, unknown>, timeKey));
+    return Array.from(items.values()).sort((a, b) => itemTime(b) - itemTime(a));
 }
 
 function collectStorageKeys(value: unknown, keys = new Set<string>()) {

@@ -1,10 +1,13 @@
 import axios, { type AxiosRequestConfig } from "axios";
 
 import { buildApiUrl, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { VIDEO_GENERATION_TIMEOUT_MS } from "./video-constants";
 
 type RequestOptions = { signal?: AbortSignal };
 
 const MODEL_API_TIMEOUT_MS = 600_000;
+const PLUGIN_POLL_MAX_ATTEMPTS = 3;
+const PLUGIN_POLL_RETRY_BASE_DELAY_MS = 1000;
 
 export type PluginHttpOptions = {
     headers?: Record<string, string>;
@@ -43,7 +46,7 @@ function pluginUrl(config: AiConfig, path: string) {
     return buildApiUrl(config.baseUrl, path.startsWith("/") ? path : `/${path}`);
 }
 
-function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHttp {
+function createPluginHttp(config: AiConfig, options?: RequestOptions, timeoutMs = MODEL_API_TIMEOUT_MS): PluginHttp {
     const run = async (method: "get" | "post", path: string, body: unknown, opts?: PluginHttpOptions) => {
         const isForm = typeof FormData !== "undefined" && body instanceof FormData;
         const response = await axios.request({
@@ -54,7 +57,7 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHtt
             headers: pluginHeaders({ Authorization: `Bearer ${config.apiKey}`, ...opts?.headers }, method === "post" && !isForm && body !== undefined),
             responseType: opts?.responseType || "json",
             signal: options?.signal,
-            timeout: MODEL_API_TIMEOUT_MS,
+            timeout: timeoutMs,
         });
         return response.data;
     };
@@ -66,9 +69,9 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHtt
 }
 
 /** Raw request with no automatic auth header — the script controls method, url, headers, body entirely. */
-function createPluginRequest(config: AiConfig, options?: RequestOptions) {
+function createPluginRequest(config: AiConfig, options?: RequestOptions, timeoutMs = MODEL_API_TIMEOUT_MS) {
     return async (requestConfig: AxiosRequestConfig & { url: string }) => {
-        const response = await axios.request({ timeout: MODEL_API_TIMEOUT_MS, ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal });
+        const response = await axios.request({ timeout: timeoutMs, ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal });
         return response.data;
     };
 }
@@ -91,14 +94,28 @@ function sleep(ms: number, signal?: AbortSignal) {
     });
 }
 
-function createPoll(signal?: AbortSignal) {
+function createPoll(signal?: AbortSignal, defaultTimeoutMs = MODEL_API_TIMEOUT_MS) {
     return async function poll<T, R>(request: () => Promise<T>, extract: (value: T) => R | null | undefined | false, options?: PluginPollOptions): Promise<R> {
         const intervalMs = options?.intervalMs ?? 2500;
-        const timeoutMs = options?.timeoutMs ?? MODEL_API_TIMEOUT_MS;
+        const timeoutMs = options?.timeoutMs ?? defaultTimeoutMs;
         const deadline = performance.now() + timeoutMs;
         for (;;) {
             if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-            const result = extract(await request());
+            let response: T | undefined;
+            let lastError: unknown;
+            for (let attempt = 0; attempt < PLUGIN_POLL_MAX_ATTEMPTS; attempt += 1) {
+                try {
+                    response = await request();
+                    lastError = undefined;
+                    break;
+                } catch (error) {
+                    if (signal?.aborted || axios.isCancel(error) || (error instanceof DOMException && error.name === "AbortError")) throw error;
+                    lastError = error;
+                    if (attempt < PLUGIN_POLL_MAX_ATTEMPTS - 1) await sleep(PLUGIN_POLL_RETRY_BASE_DELAY_MS * (attempt + 1), signal);
+                }
+            }
+            if (lastError) throw lastError;
+            const result = extract(response as T);
             if (result !== null && result !== undefined && result !== false) return result;
             if (performance.now() >= deadline) throw new Error("插件轮询超时，请检查调用脚本或稍后重试");
             await sleep(intervalMs, signal);
@@ -115,9 +132,10 @@ function createPoll(signal?: AbortSignal) {
  */
 export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<T> {
     const { config } = args;
-    const http = createPluginHttp(config, { signal: args.signal });
-    const request = createPluginRequest(config, { signal: args.signal });
-    const poll = createPoll(args.signal);
+    const timeoutMs = args.capability === "video" ? VIDEO_GENERATION_TIMEOUT_MS : MODEL_API_TIMEOUT_MS;
+    const http = createPluginHttp(config, { signal: args.signal }, timeoutMs);
+    const request = createPluginRequest(config, { signal: args.signal }, timeoutMs);
+    const poll = createPoll(args.signal, timeoutMs);
     const runner = new Function(
         "prompt",
         "images",
@@ -257,9 +275,13 @@ const task = await request({
   data: { model, prompt, seconds: params.seconds },
 });
 return await poll(
-  () => request({ method: "get", url: \`\${baseUrl}/v1/videos/\${task.id}\`, headers }),
-  (state) => state.status === "completed" ? { url: state.video_url || state.url } : null,
-  { intervalMs: 2500, timeoutMs: 600000 },
+  () => request({ method: "get", url: \`\${baseUrl}/v1/videos/\${encodeURIComponent(task.id)}\`, headers }),
+  (state) => {
+    const status = String(state.status || "").toLowerCase();
+    if (["failed", "cancelled", "canceled", "expired", "error"].includes(status)) throw new Error(state.error?.message || state.error || "视频生成失败");
+    return ["completed", "succeeded", "done"].includes(status) ? { url: state.video_url || state.url } : null;
+  },
+  { intervalMs: 2500 },
 );`,
         },
         {
@@ -284,7 +306,7 @@ return await poll(
     if (!uri) throw new Error("Gemini 未返回视频 URI");
     return { url: uri.includes("key=") ? uri : \`\${uri}\${uri.includes("?") ? "&" : "?"}key=\${apiKey}\` };
   },
-  { intervalMs: 5000, timeoutMs: 600000 },
+  { intervalMs: 5000 },
 );`,
         },
     ],

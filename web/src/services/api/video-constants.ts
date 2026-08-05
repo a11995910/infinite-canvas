@@ -1,0 +1,1 @@
+export const VIDEO_GENERATION_TIMEOUT_MS = 20 * 60 * 1000;

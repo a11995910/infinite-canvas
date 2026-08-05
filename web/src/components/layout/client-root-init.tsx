@@ -66,13 +66,10 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         applyConfig(clearSub2APIEmbedConfig(useConfigStore.getState().config), updateConfig);
         beginEmbedLogin();
         void fetchSub2APIEmbedSession({ token: embed.token, srcHost: embed.srcHost })
-            .then((session) => {
+            .then(async (session) => {
+                const payload = await fetchSub2APIEmbedConfig({ token: embed.token, srcHost: embed.srcHost });
+                if (!hasSub2APIEmbedChannel(useConfigStore.getState().config, payload)) applyConfig(buildSub2APIEmbedConfig(useConfigStore.getState().config, payload), updateConfig);
                 setSession(session.token, session.user);
-                return fetchSub2APIEmbedConfig({ token: embed.token, srcHost: embed.srcHost });
-            })
-            .then((payload) => {
-                if (hasSub2APIEmbedChannel(useConfigStore.getState().config, payload)) return;
-                applyConfig(buildSub2APIEmbedConfig(useConfigStore.getState().config, payload), updateConfig);
             })
             .catch((error) => {
                 failEmbedLogin(error instanceof Error ? error.message : undefined);

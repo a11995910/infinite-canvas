@@ -8,6 +8,7 @@ export type Sub2APIEmbedParams = {
 
 export type Sub2APIEmbedKey = {
     id: number;
+    group_id?: number;
     key: string;
     name: string;
     status: string;
@@ -20,7 +21,7 @@ export type Sub2APIEmbedKey = {
 
 export type Sub2APIEmbedKeyChannel = {
     key: Sub2APIEmbedKey;
-    models: string[];
+    models: ChannelModel[];
 };
 
 export type Sub2APIEmbedConfig = {
@@ -76,7 +77,7 @@ export function sub2APIEmbedChannelId(key: Pick<Sub2APIEmbedKey, "id">) {
     return `${SUB2API_EMBED_CHANNEL_PREFIX}${key.id}`;
 }
 
-export function createSub2APIEmbedChannel(key: Sub2APIEmbedKey, proxyBaseUrl: string, models: string[] = []): ModelChannel {
+export function createSub2APIEmbedChannel(key: Sub2APIEmbedKey, proxyBaseUrl: string, models: Array<string | ChannelModel> = []): ModelChannel {
     const apiFormat = sub2APIKeyApiFormat(key);
     if (!apiFormat) throw new Error("Sub2API Key 平台暂不支持");
     const channelModels = normalizeChannelModels(models);
@@ -158,7 +159,7 @@ function sub2APIKeyPlatform(key: Sub2APIEmbedKey) {
     return key.group?.platform?.trim().toLowerCase();
 }
 
-function isSub2APIEmbedChannelId(channelId: string) {
+export function isSub2APIEmbedChannelId(channelId: string) {
     return channelId.startsWith(SUB2API_EMBED_CHANNEL_PREFIX) || legacySub2APIEmbedChannelIds.includes(channelId);
 }
 
@@ -176,5 +177,11 @@ function isSub2APIEmbedModel(model: string) {
 }
 
 function sameModels(left: ChannelModel[], right: ChannelModel[]) {
-    return left.length === right.length && left.every((model, index) => model.name === right[index]?.name && model.capability === right[index]?.capability && model.script === right[index]?.script);
+    return (
+        left.length === right.length &&
+        left.every(
+            (model, index) =>
+                model.name === right[index]?.name && model.capability === right[index]?.capability && model.script === right[index]?.script && model.price?.amount === right[index]?.price?.amount && model.price?.unit === right[index]?.price?.unit,
+        )
+    );
 }
