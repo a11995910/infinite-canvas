@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronRight, Group, Image as ImageIcon, Music2, Puzzle, RefreshCw, Star, Video } from "lucide-react";
+import { ChevronRight, Clock3, Group, Image as ImageIcon, Music2, Puzzle, RefreshCw, Star, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -435,6 +435,7 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;
     if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;
+    if (props.node.metadata?.status === "pending_confirmation") return <PendingConfirmationContent node={props.node} theme={props.theme} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
     const Renderer = nodeContentRenderers[props.node.type as CanvasNodeType];
@@ -480,6 +481,16 @@ function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
         <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
             <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
             <span className="text-[10px] tracking-[0.2em]">生成中</span>
+        </div>
+    );
+}
+
+function PendingConfirmationContent({ node, theme }: Pick<NodeContentRendererProps, "node" | "theme">) {
+    return (
+        <div className="flex max-w-[260px] flex-col items-center gap-3 px-5 text-center" style={{ color: theme.node.muted }}>
+            <Clock3 className="size-6" />
+            <div className="text-xs font-medium" style={{ color: theme.node.text }}>结果待确认</div>
+            <div className="text-[11px] leading-5">{node.metadata?.errorDetails || "上游任务仍由系统确认"}</div>
         </div>
     );
 }

@@ -37,7 +37,16 @@ type RequestOptions = { signal?: AbortSignal; onProgress?: (progress: number | u
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
 export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "grok" | "plugin"; model: string };
-export type VideoGenerationTaskState = { status: "pending"; progress?: number } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
+export type VideoGenerationTaskState = { status: "pending"; progress?: number } | { status: "unknown"; error: string; progress?: number } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
+
+export class VideoGenerationPendingError extends Error {
+    readonly kind = "video-generation-pending" as const;
+
+    constructor(message: string, readonly task?: VideoGenerationTask) {
+        super(message);
+        this.name = "VideoGenerationPendingError";
+    }
+}
 
 export { VIDEO_GENERATION_TIMEOUT_MS } from "./video-constants";
 
@@ -68,9 +77,10 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
         const state = await pollVideoGenerationTask(config, task, options);
         if (state.status === "completed") return state.result;
         if (state.status === "failed") throw new Error(state.error);
+        if (state.status === "unknown") throw new VideoGenerationPendingError(state.error, task);
         options?.onProgress?.(state.progress);
         const remainingMs = deadline - performance.now();
-        if (remainingMs <= 0) throw new Error(`${task.provider === "seedance" ? "Seedance " : ""}视频生成超时，请稍后重试`);
+        if (remainingMs <= 0) throw new VideoGenerationPendingError(`${task.provider === "seedance" ? "Seedance " : ""}视频仍在上游处理中，请稍后继续查询`, task);
         await delay(Math.min(delayMs, remainingMs), options?.signal);
     }
 }
@@ -107,7 +117,7 @@ export async function pollVideoGenerationTask(config: AiConfig, task: VideoGener
             if (attempt < VIDEO_POLL_MAX_ATTEMPTS - 1) await delay(VIDEO_POLL_RETRY_BASE_DELAY_MS * (attempt + 1), options?.signal);
         }
     }
-    throw lastError;
+    return { status: "unknown", error: lastError instanceof Error ? lastError.message : "视频任务暂时无法确认" };
 }
 
 async function pollVideoGenerationTaskOnce(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
@@ -186,7 +196,7 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
         if (!created.id) throw new Error("视频接口没有返回任务 ID");
         return { id: created.id, provider: "openai", model };
     } catch (error) {
-        throw new Error(readAxiosError(error, "视频任务创建失败"));
+        throw videoCreationError(error, "视频任务创建失败");
     }
 }
 
@@ -209,7 +219,7 @@ async function createSub2APISeedanceTask(config: AiConfig, model: string, prompt
         if (!created.id) throw new Error("Sub2API Seedance 接口没有返回任务 ID");
         return { id: created.id, provider: "openai", model };
     } catch (error) {
-        throw new Error(readAxiosError(error, "Sub2API Seedance 任务创建失败"));
+        throw videoCreationError(error, "Sub2API Seedance 任务创建失败");
     }
 }
 
@@ -283,7 +293,7 @@ async function createGrokVideoTask(config: AiConfig, model: string, prompt: stri
         if (!id) throw new Error("Grok 视频接口没有返回任务 ID");
         return { id, provider: "grok", model };
     } catch (error) {
-        throw new Error(readAxiosError(error, "Grok 视频任务创建失败"));
+        throw videoCreationError(error, "Grok 视频任务创建失败");
     }
 }
 
@@ -293,7 +303,7 @@ async function pollGrokVideoTask(config: AiConfig, task: VideoGenerationTask, op
         const url = grokVideoResultUrl(state);
         const status = String(state.status || "").toLowerCase();
         if (["done", "completed", "succeeded"].includes(status)) {
-            if (!url) return { status: "failed", error: "Grok 视频任务已完成但没有返回视频 URL" };
+            if (!url) return { status: "unknown", error: "Grok 视频任务已完成但尚未返回可用视频" };
             return { status: "completed", result: await videoResultFromUrl(url, options) };
         }
         if (["failed", "expired", "cancelled", "canceled", "error"].includes(status)) return { status: "failed", error: readApiErrorMessage(state.error) || `Grok 视频生成${status === "expired" ? "已过期" : "失败"}` };
@@ -327,7 +337,7 @@ async function createSeedanceTask(config: AiConfig, model: string, prompt: strin
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
         return { id: created.id, provider: "seedance", model };
     } catch (error) {
-        throw new Error(readAxiosError(error, "Seedance 任务创建失败"));
+        throw videoCreationError(error, "Seedance 任务创建失败");
     }
 }
 
@@ -505,6 +515,15 @@ function readAxiosError(error: unknown, fallback: string) {
     }
     if (error instanceof DOMException && error.name === "AbortError") return "请求已取消";
     return error instanceof Error ? readApiErrorMessage(error.message) || error.message : fallback;
+}
+
+function videoCreationError(error: unknown, fallback: string) {
+    const message = readAxiosError(error, fallback);
+    if (axios.isAxiosError(error) && !isAbortError(error)) {
+        const status = error.response?.status;
+        if (!status || status === 429 || status >= 500) return new VideoGenerationPendingError(message);
+    }
+    return new Error(message);
 }
 
 function statusMessage(status: number | undefined, fallback: string) {

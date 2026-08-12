@@ -6,7 +6,7 @@ import { saveAs } from "file-saver";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
-import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
+import { requestVideoGeneration, storeGeneratedVideo, VideoGenerationPendingError } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { uploadImage } from "@/services/image-storage";
 import { uploadMediaFile } from "@/services/file-storage";
@@ -122,6 +122,7 @@ const CONNECTION_HANDLE_HIT_RADIUS = 40;
 const CONNECTION_NODE_HIT_PADDING = 32;
 const NODE_STATUS_IDLE = "idle" as const;
 const NODE_STATUS_LOADING = "loading" as const;
+const NODE_STATUS_PENDING_CONFIRMATION = "pending_confirmation" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
 const IMAGE_PROMPT_REVERSE_PRESET = `请根据参考图片反推一段适合用于 AI 生图的提示词。
@@ -2379,9 +2380,27 @@ function InfiniteCanvasPage() {
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
-                message.error(errorDetails);
+                const pendingTask = error instanceof VideoGenerationPendingError ? error.task : undefined;
+                const pendingVideo = mode === "video" && error instanceof VideoGenerationPendingError;
+                pendingVideo ? message.warning(errorDetails) : message.error(errorDetails);
                 setNodes((prev) =>
-                    prev.map((node) => (node.id === nodeId || pendingChildIds.includes(node.id) ? (node.id === nodeId && !markSourceStatus ? node : { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } }) : node)),
+                    prev.map((node) =>
+                        node.id === nodeId || pendingChildIds.includes(node.id)
+                            ? node.id === nodeId && !markSourceStatus
+                                ? node
+                                : {
+                                      ...node,
+                                      metadata: {
+                                          ...node.metadata,
+                                          status: pendingVideo ? NODE_STATUS_PENDING_CONFIRMATION : NODE_STATUS_ERROR,
+                                          errorDetails,
+                                          videoTaskId: pendingVideo ? pendingTask?.id : node.metadata?.videoTaskId,
+                                          videoTaskProvider: pendingVideo ? pendingTask?.provider : node.metadata?.videoTaskProvider,
+                                          videoTaskModel: pendingVideo ? pendingTask?.model : node.metadata?.videoTaskModel,
+                                      },
+                                  }
+                            : node,
+                    ),
                 );
             } finally {
                 finishGenerationRequest(nodeId, runController);
@@ -2520,8 +2539,26 @@ function InfiniteCanvasPage() {
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
-                message.error(errorDetails);
-                setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+                const pendingTask = error instanceof VideoGenerationPendingError ? error.task : undefined;
+                const pendingVideo = node.type === CanvasNodeType.Video && error instanceof VideoGenerationPendingError;
+                pendingVideo ? message.warning(errorDetails) : message.error(errorDetails);
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === node.id
+                            ? {
+                                  ...item,
+                                  metadata: {
+                                      ...item.metadata,
+                                      status: pendingVideo ? NODE_STATUS_PENDING_CONFIRMATION : NODE_STATUS_ERROR,
+                                      errorDetails,
+                                      videoTaskId: pendingVideo ? pendingTask?.id : item.metadata?.videoTaskId,
+                                      videoTaskProvider: pendingVideo ? pendingTask?.provider : item.metadata?.videoTaskProvider,
+                                      videoTaskModel: pendingVideo ? pendingTask?.model : item.metadata?.videoTaskModel,
+                                  },
+                              }
+                            : item,
+                    ),
+                );
             } finally {
                 finishGenerationRequest(node.id, controller);
                 setRunningNodeId(null);

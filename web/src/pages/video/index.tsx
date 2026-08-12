@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Music2, Plus, SlidersHorizontal, Sparkles, Square, Trash2, Upload, VideoIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Clock3, Download, FolderPlus, History, LoaderCircle, Music2, Plus, SlidersHorizontal, Sparkles, Square, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Progress, Tag, Typography } from "antd";
 import localforage from "localforage";
@@ -16,7 +16,7 @@ import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceRatio, seedanceRefe
 import { isSub2APIEmbedChannelId, readSub2APIEmbedParams } from "@/lib/sub2api-embed";
 import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
-import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, VIDEO_GENERATION_TIMEOUT_MS, type VideoGenerationTask } from "@/services/api/video";
+import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, VideoGenerationPendingError, VIDEO_GENERATION_TIMEOUT_MS, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -38,7 +38,7 @@ type GeneratedVideo = {
 
 type GenerationResult = {
     id: string;
-    status: "pending" | "success" | "failed";
+    status: "pending" | "unknown" | "success" | "failed";
     video?: GeneratedVideo;
     error?: string;
     progress?: number;
@@ -60,7 +60,7 @@ type GenerationLog = {
     size: string;
     resolution: string;
     seconds: string;
-    status: "生成中" | "成功" | "失败";
+    status: "生成中" | "待确认" | "成功" | "失败";
     task?: VideoGenerationTask;
     video?: GeneratedVideo;
     error?: string;
@@ -213,11 +213,12 @@ export default function VideoPage() {
             void pollGenerationLog(log, snapshot.config, agentTaskId, controller);
         } catch (error) {
             if (controller.signal.reason === "unmount") return;
-            const errorMessage = controller.signal.reason === "user" ? "已停止等待，任务尚未提交或可能仍在上游创建" : error instanceof Error ? error.message : "生成失败";
-            setResults([{ id: nanoid(), status: "failed", error: errorMessage }]);
+            const pending = controller.signal.reason === "user" || error instanceof VideoGenerationPendingError;
+            const errorMessage = controller.signal.reason === "user" ? "已停止等待，上游提交结果待确认" : error instanceof Error ? error.message : "生成失败";
+            setResults([{ id: nanoid(), status: pending ? "unknown" : "failed", error: errorMessage }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
-            await saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences, durationMs: performance.now() - batchStartedAt, status: "失败", error: errorMessage }));
-            controller.signal.reason === "user" ? message.warning(errorMessage) : message.error(errorMessage);
+            await saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences, durationMs: performance.now() - batchStartedAt, status: pending ? "待确认" : "失败", task: error instanceof VideoGenerationPendingError ? error.task : undefined, error: errorMessage }));
+            pending ? message.warning(errorMessage) : message.error(errorMessage);
             setRunning(false);
         } finally {
             if (creationControllerRef.current === controller) creationControllerRef.current = null;
@@ -346,7 +347,7 @@ export default function VideoPage() {
 
     const resumePendingLogs = (items: GenerationLog[]) => {
         for (const log of items) {
-            if (log.status === "生成中" && log.task) void pollGenerationLog(log);
+            if ((log.status === "生成中" || log.status === "待确认") && log.task) void pollGenerationLog(log);
         }
     };
 
@@ -382,20 +383,27 @@ export default function VideoPage() {
                     return;
                 }
                 if (state.status === "failed") throw new Error(state.error);
+                if (state.status === "unknown") {
+                    setResults([{ id: log.id, status: "unknown", progress: state.progress, error: state.error }]);
+                    await saveLog({ ...log, status: "待确认", durationMs: Date.now() - log.createdAt, error: state.error });
+                    message.warning("暂时无法确认上游结果，稍后将继续查询");
+                    return;
+                }
                 setResults([{ id: log.id, status: "pending", progress: state.progress }]);
                 const remainingMs = deadline - performance.now();
-                if (remainingMs <= 0) throw new Error("视频生成超时，请稍后重试");
+                if (remainingMs <= 0) throw new VideoGenerationPendingError("视频仍在上游处理中，请稍后继续查询", log.task);
                 const delayMs = log.task.provider === "seedance" || log.task.provider === "grok" ? 5000 : 2500;
                 await delay(Math.min(delayMs, remainingMs), controller.signal);
             }
         } catch (error) {
             const abortReason = String(controller.signal.reason || "");
             if (abortReason === "unmount" || abortReason === "deleted") return;
-            const errorMessage = abortReason === "user" ? "已停止等待，上游任务可能仍在生成" : error instanceof Error ? error.message : "生成失败";
-            setResults([{ id: log.id, status: "failed", error: errorMessage }]);
+            const pending = abortReason === "user" || error instanceof VideoGenerationPendingError;
+            const errorMessage = abortReason === "user" ? "已停止等待，上游任务仍由系统确认" : error instanceof Error ? error.message : "生成失败";
+            setResults([{ id: log.id, status: pending ? "unknown" : "failed", error: errorMessage }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
-            await saveLog({ ...log, status: "失败", durationMs: Date.now() - log.createdAt, error: errorMessage });
-            abortReason === "user" ? message.warning(errorMessage) : message.error(errorMessage);
+            await saveLog({ ...log, status: pending ? "待确认" : "失败", durationMs: Date.now() - log.createdAt, error: errorMessage });
+            pending ? message.warning(errorMessage) : message.error(errorMessage);
         } finally {
             if (activeControllersRef.current.get(log.id) === controller) activeControllersRef.current.delete(log.id);
             if (!activeControllersRef.current.size && !creationControllerRef.current) {
@@ -423,7 +431,7 @@ export default function VideoPage() {
         if (log.config.videoSeconds) updateConfig("videoSeconds", log.config.videoSeconds);
         if (log.config.videoGenerateAudio) updateConfig("videoGenerateAudio", log.config.videoGenerateAudio);
         if (log.config.videoWatermark) updateConfig("videoWatermark", log.config.videoWatermark);
-        setResults(log.status === "生成中" ? [{ id: log.id, status: "pending" }] : log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || "生成失败" }]);
+        setResults(log.status === "生成中" ? [{ id: log.id, status: "pending" }] : log.status === "待确认" ? [{ id: log.id, status: "unknown", error: log.error || "上游结果待确认" }] : log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || "生成失败" }]);
     };
 
     return (
@@ -572,7 +580,7 @@ export default function VideoPage() {
                         </div>
                         {results.length ? (
                             <div className="grid gap-4">
-                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || "生成失败"} onRetry={retryResult} /> : <PendingVideoCard key={result.id} progress={result.progress} />))}
+                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || "生成失败"} onRetry={retryResult} /> : result.status === "unknown" ? <UnknownVideoCard key={result.id} error={result.error || "上游结果待确认"} /> : <PendingVideoCard key={result.id} progress={result.progress} />))}
                             </div>
                         ) : (
                             <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 lg:min-h-[560px]">
@@ -664,6 +672,20 @@ function PendingVideoCard({ progress }: { progress?: number }) {
     );
 }
 
+function UnknownVideoCard({ error }: { error: string }) {
+    return (
+        <div className="relative aspect-video overflow-hidden rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/20">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-5 text-center text-amber-700 dark:text-amber-300">
+                <Clock3 className="size-6" />
+                <span className="text-sm font-medium">结果待确认</span>
+                <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-amber-600 dark:!text-amber-300">
+                    {error}
+                </Typography.Paragraph>
+            </div>
+        </div>
+    );
+}
+
 function FailedVideoCard({ error, onRetry }: { error: string; onRetry: () => void }) {
     return (
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
@@ -743,7 +765,7 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                     </div>
                 </div>
                 <div className="grid justify-items-end gap-2">
-                    <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color={log.status === "成功" ? "blue" : log.status === "生成中" ? "processing" : "red"}>
+                    <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color={log.status === "成功" ? "blue" : log.status === "生成中" ? "processing" : log.status === "待确认" ? "gold" : "red"}>
                         {log.status}
                     </Tag>
                     <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
