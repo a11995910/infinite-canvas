@@ -237,6 +237,7 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
         if (["failed", "cancelled", "canceled", "expired", "error"].includes(status)) return { status: "failed", error: readApiErrorMessage(video.error) || `视频生成${status === "expired" ? "已过期" : "失败"}` };
         return { status: "pending", progress: normalizeVideoProgress(video.progress) };
     } catch (error) {
+        if (isAbortError(error)) throw error;
         throw new Error(readAxiosError(error, "视频任务查询失败"));
     }
 }
@@ -309,6 +310,7 @@ async function pollGrokVideoTask(config: AiConfig, task: VideoGenerationTask, op
         if (["failed", "expired", "cancelled", "canceled", "error"].includes(status)) return { status: "failed", error: readApiErrorMessage(state.error) || `Grok 视频生成${status === "expired" ? "已过期" : "失败"}` };
         return { status: "pending", progress: normalizeVideoProgress(state.progress) };
     } catch (error) {
+        if (isAbortError(error)) throw error;
         throw new Error(readAxiosError(error, "Grok 视频任务查询失败"));
     }
 }
@@ -347,10 +349,11 @@ async function pollSeedanceTask(config: AiConfig, task: VideoGenerationTask, opt
         const url = videoResultUrl(state);
         if (url) return { status: "completed", result: await videoResultFromUrl(url, options) };
         const status = String(state.status || "").toLowerCase();
-        if (["succeeded", "completed", "done"].includes(status)) return { status: "failed", error: "Seedance 任务成功但没有返回视频 URL" };
+        if (["succeeded", "completed", "done"].includes(status)) return { status: "unknown", error: "Seedance 任务已完成但尚未返回可用视频" };
         if (["failed", "cancelled", "canceled", "expired", "error"].includes(status)) return { status: "failed", error: readApiErrorMessage(state.error) || `Seedance 视频生成${status === "expired" ? "超时" : "失败"}` };
         return { status: "pending", progress: normalizeVideoProgress(state.progress) };
     } catch (error) {
+        if (isAbortError(error)) throw error;
         throw new Error(readAxiosError(error, "Seedance 任务查询失败"));
     }
 }
