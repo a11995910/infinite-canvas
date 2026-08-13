@@ -6,7 +6,7 @@ import { saveAs } from "file-saver";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
-import { requestVideoGeneration, storeGeneratedVideo, VideoGenerationPendingError } from "@/services/api/video";
+import { pollVideoGenerationTask, requestVideoGeneration, storeGeneratedVideo, VideoGenerationPendingError, type VideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { uploadImage } from "@/services/image-storage";
 import { uploadMediaFile } from "@/services/file-storage";
@@ -152,6 +152,8 @@ function InfiniteCanvasPage() {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const projectId = params.id || "";
+    const projectIdRef = useRef(projectId);
+    projectIdRef.current = projectId;
     const localAgentConnected = useAgentStore((state) => state.connected);
     const localAgentActivity = useAgentStore((state) => state.activity);
     const localAgentEnabled = useAgentStore((state) => state.enabled);
@@ -256,6 +258,8 @@ function InfiniteCanvasPage() {
     const selectionBoxRef = useRef(selectionBox);
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
+    const videoRecoveryControllersRef = useRef(new Map<string, { controller: AbortController; taskId: string }>());
+    const videoRecoveryTimersRef = useRef(new Map<string, { timer: number; taskId: string }>());
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
@@ -423,6 +427,105 @@ function InfiniteCanvasPage() {
         connectionTargetNodeIdRef.current = connectionTargetNodeId;
         pendingConnectionCreateRef.current = pendingConnectionCreate;
     }, [nodes, connections, selectedNodeIds, viewport, connectingParams, connectionTargetNodeId, pendingConnectionCreate]);
+
+    const resumePendingVideoNode = useCallback(
+        async (nodeId: string): Promise<void> => {
+            const recoveryProjectId = projectId;
+            const node = nodesRef.current.find((item) => item.id === nodeId);
+            const metadata = node?.metadata;
+            if (!node || node.type !== CanvasNodeType.Video || metadata?.status !== NODE_STATUS_PENDING_CONFIRMATION || !metadata.videoTaskId || !metadata.videoTaskProvider || !metadata.videoTaskModel || videoRecoveryControllersRef.current.has(nodeId)) return;
+            const task: VideoGenerationTask = { id: metadata.videoTaskId, provider: metadata.videoTaskProvider, model: metadata.videoTaskModel };
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "video"), model: task.model };
+            if (!isAiConfigReady(generationConfig, task.model)) return;
+
+            const controller = new AbortController();
+            videoRecoveryControllersRef.current.set(nodeId, { controller, taskId: task.id });
+            let retryDelay = 0;
+            try {
+                const state = await pollVideoGenerationTask(generationConfig, task, { signal: controller.signal });
+                const taskIsCurrent = () => projectIdRef.current === recoveryProjectId && nodesRef.current.some((item) => item.id === nodeId && item.metadata?.videoTaskId === task.id);
+                if (!taskIsCurrent()) return;
+                if (state.status === "completed") {
+                    const video = await storeGeneratedVideo(state.result, { signal: controller.signal });
+                    if (controller.signal.aborted) return;
+                    const current = nodesRef.current.find((item) => item.id === nodeId);
+                    if (!current || current.metadata?.videoTaskId !== task.id) return;
+                    const videoSize = fitNodeSize(video.width || current.width, video.height || current.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                    setNodes((prev) =>
+                        prev.map((item) =>
+                            item.id === nodeId && item.metadata?.videoTaskId === task.id
+                                ? {
+                                      ...item,
+                                      width: videoSize.width,
+                                      height: videoSize.height,
+                                      position: { x: item.position.x + item.width / 2 - videoSize.width / 2, y: item.position.y + item.height / 2 - videoSize.height / 2 },
+                                      metadata: { ...item.metadata, ...videoMetadata(video), errorDetails: undefined, videoTaskId: undefined, videoTaskProvider: undefined, videoTaskModel: undefined },
+                                  }
+                                : item,
+                        ),
+                    );
+                    return;
+                }
+                if (state.status === "failed") {
+                    setNodes((prev) => prev.map((item) => (item.id === nodeId && item.metadata?.videoTaskId === task.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: state.error, videoTaskId: undefined, videoTaskProvider: undefined, videoTaskModel: undefined } } : item)));
+                    return;
+                }
+                const errorDetails = state.status === "unknown" ? state.error : "视频仍在上游处理中，稍后继续查询";
+                setNodes((prev) => prev.map((item) => (item.id === nodeId && item.metadata?.videoTaskId === task.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_PENDING_CONFIRMATION, errorDetails } } : item)));
+                retryDelay = state.status === "unknown" ? 10_000 : 5_000;
+            } catch (error) {
+                if (isGenerationCanceled(error)) return;
+                const errorDetails = error instanceof Error ? error.message : "视频任务暂时无法确认";
+                setNodes((prev) => prev.map((item) => (item.id === nodeId && item.metadata?.videoTaskId === task.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_PENDING_CONFIRMATION, errorDetails } } : item)));
+                retryDelay = 10_000;
+            } finally {
+                if (videoRecoveryControllersRef.current.get(nodeId)?.controller === controller) videoRecoveryControllersRef.current.delete(nodeId);
+                if (retryDelay && projectIdRef.current === recoveryProjectId && nodesRef.current.some((item) => item.id === nodeId && item.metadata?.videoTaskId === task.id) && !videoRecoveryTimersRef.current.has(nodeId)) {
+                    const timer = window.setTimeout(() => {
+                        if (videoRecoveryTimersRef.current.get(nodeId)?.taskId === task.id) videoRecoveryTimersRef.current.delete(nodeId);
+                        void resumePendingVideoNode(nodeId);
+                    }, retryDelay);
+                    videoRecoveryTimersRef.current.set(nodeId, { timer, taskId: task.id });
+                }
+            }
+        },
+        [effectiveConfig, isAiConfigReady, projectId],
+    );
+
+    useEffect(() => {
+        if (!projectLoaded) return;
+        const pendingIds = new Set(
+            nodes
+                .filter((node) => node.type === CanvasNodeType.Video && node.metadata?.status === NODE_STATUS_PENDING_CONFIRMATION && node.metadata.videoTaskId && node.metadata.videoTaskProvider && node.metadata.videoTaskModel)
+                .map((node) => node.id),
+        );
+        videoRecoveryControllersRef.current.forEach((entry, nodeId) => {
+            const currentTaskId = nodes.find((node) => node.id === nodeId)?.metadata?.videoTaskId;
+            if (!pendingIds.has(nodeId) || currentTaskId !== entry.taskId) {
+                entry.controller.abort();
+                videoRecoveryControllersRef.current.delete(nodeId);
+            }
+        });
+        videoRecoveryTimersRef.current.forEach((entry, nodeId) => {
+            const currentTaskId = nodes.find((node) => node.id === nodeId)?.metadata?.videoTaskId;
+            if (pendingIds.has(nodeId) && currentTaskId === entry.taskId) return;
+            window.clearTimeout(entry.timer);
+            videoRecoveryTimersRef.current.delete(nodeId);
+        });
+        pendingIds.forEach((nodeId) => {
+            if (!videoRecoveryTimersRef.current.has(nodeId)) void resumePendingVideoNode(nodeId);
+        });
+    }, [nodes, projectLoaded, resumePendingVideoNode]);
+
+    useEffect(
+        () => () => {
+            videoRecoveryControllersRef.current.forEach(({ controller }) => controller.abort());
+            videoRecoveryControllersRef.current.clear();
+            videoRecoveryTimersRef.current.forEach(({ timer }) => window.clearTimeout(timer));
+            videoRecoveryTimersRef.current.clear();
+        },
+        [projectId],
+    );
 
     useLayoutEffect(() => {
         selectionBoxRef.current = selectionBox;
@@ -720,6 +823,13 @@ function InfiniteCanvasPage() {
             const allIds = new Set(ids);
             nodesRef.current.forEach((node) => {
                 if (ids.has(node.id)) node.metadata?.batchChildIds?.forEach((childId) => allIds.add(childId));
+            });
+            allIds.forEach((id) => {
+                videoRecoveryControllersRef.current.get(id)?.controller.abort();
+                videoRecoveryControllersRef.current.delete(id);
+                const timer = videoRecoveryTimersRef.current.get(id)?.timer;
+                if (timer) window.clearTimeout(timer);
+                videoRecoveryTimersRef.current.delete(id);
             });
             setNodes((prev) => {
                 const next = prev.filter((node) => !allIds.has(node.id));

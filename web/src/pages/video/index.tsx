@@ -77,6 +77,10 @@ export default function VideoPage() {
     const { message } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const activeControllersRef = useRef<Map<string, AbortController>>(new Map());
+    const pendingResumeTimersRef = useRef<Map<string, number>>(new Map());
+    const stoppedLogIdsRef = useRef<Set<string>>(new Set());
+    const deletedLogIdsRef = useRef<Set<string>>(new Set());
+    const mountedRef = useRef(true);
     const creationControllerRef = useRef<AbortController | null>(null);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
@@ -125,9 +129,16 @@ export default function VideoPage() {
     }, [embedConfigReady]);
 
     useEffect(
-        () => () => {
-            creationControllerRef.current?.abort("unmount");
-            activeControllersRef.current.forEach((controller) => controller.abort("unmount"));
+        () => {
+            mountedRef.current = true;
+            return () => {
+                mountedRef.current = false;
+                creationControllerRef.current?.abort("unmount");
+                activeControllersRef.current.forEach((controller) => controller.abort("unmount"));
+                activeControllersRef.current.clear();
+                pendingResumeTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+                pendingResumeTimersRef.current.clear();
+            };
         },
         [],
     );
@@ -316,7 +327,14 @@ export default function VideoPage() {
     };
 
     const deleteSelectedLogs = () => {
-        selectedLogIds.forEach((id) => activeControllersRef.current.get(id)?.abort("deleted"));
+        selectedLogIds.forEach((id) => {
+            deletedLogIdsRef.current.add(id);
+            activeControllersRef.current.get(id)?.abort("deleted");
+            const timer = pendingResumeTimersRef.current.get(id);
+            if (timer) window.clearTimeout(timer);
+            pendingResumeTimersRef.current.delete(id);
+            stoppedLogIdsRef.current.delete(id);
+        });
         const mediaKeys = logs
             .filter((log) => selectedLogIds.includes(log.id))
             .map((log) => log.video?.storageKey)
@@ -334,7 +352,12 @@ export default function VideoPage() {
     };
 
     const saveLog = async (log: GenerationLog, resumePending = true) => {
+        if (deletedLogIdsRef.current.has(log.id)) return;
         await logStore.setItem(log.id, serializeLog({ ...log, updatedAt: Date.now() }));
+        if (deletedLogIdsRef.current.has(log.id)) {
+            await logStore.removeItem(log.id);
+            return;
+        }
         await refreshLogs(resumePending);
     };
 
@@ -347,12 +370,21 @@ export default function VideoPage() {
 
     const resumePendingLogs = (items: GenerationLog[]) => {
         for (const log of items) {
-            if ((log.status === "生成中" || log.status === "待确认") && log.task) void pollGenerationLog(log);
+            if ((log.status === "生成中" || log.status === "待确认") && log.task && !stoppedLogIdsRef.current.has(log.id) && !deletedLogIdsRef.current.has(log.id)) void pollGenerationLog(log);
         }
     };
 
+    const schedulePendingResume = (log: GenerationLog, configOverride?: AiConfig, agentTaskId?: string) => {
+        if (!mountedRef.current || !log.task || stoppedLogIdsRef.current.has(log.id) || deletedLogIdsRef.current.has(log.id) || pendingResumeTimersRef.current.has(log.id)) return;
+        const timer = window.setTimeout(() => {
+            pendingResumeTimersRef.current.delete(log.id);
+            void pollGenerationLog(log, configOverride, agentTaskId);
+        }, 10_000);
+        pendingResumeTimersRef.current.set(log.id, timer);
+    };
+
     const pollGenerationLog = async (log: GenerationLog, configOverride?: AiConfig, agentTaskId?: string, controllerOverride?: AbortController) => {
-        if (!log.task || activeControllersRef.current.has(log.id)) return;
+        if (!log.task || deletedLogIdsRef.current.has(log.id) || activeControllersRef.current.has(log.id)) return;
         const controller = controllerOverride || new AbortController();
         activeControllersRef.current.set(log.id, controller);
         setRunning(true);
@@ -360,6 +392,7 @@ export default function VideoPage() {
         setResults((value) => (value.length ? value : [{ id: log.id, status: "pending" }]));
         const taskConfig = buildVideoConfig({ ...effectiveConfig, ...log.config }, log.task.model || log.model);
         const deadline = performance.now() + VIDEO_GENERATION_TIMEOUT_MS;
+        let resumeLog: GenerationLog | null = null;
         try {
             while (true) {
                 const state = await pollVideoGenerationTask(configOverride || taskConfig, log.task, { signal: controller.signal });
@@ -384,8 +417,11 @@ export default function VideoPage() {
                 }
                 if (state.status === "failed") throw new Error(state.error);
                 if (state.status === "unknown") {
+                    if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+                    const nextLog = { ...log, status: "待确认" as const, durationMs: Date.now() - log.createdAt, error: state.error };
                     setResults([{ id: log.id, status: "unknown", progress: state.progress, error: state.error }]);
-                    await saveLog({ ...log, status: "待确认", durationMs: Date.now() - log.createdAt, error: state.error });
+                    await saveLog(nextLog, false);
+                    resumeLog = nextLog;
                     message.warning("暂时无法确认上游结果，稍后将继续查询");
                     return;
                 }
@@ -400,12 +436,15 @@ export default function VideoPage() {
             if (abortReason === "unmount" || abortReason === "deleted") return;
             const pending = abortReason === "user" || error instanceof VideoGenerationPendingError;
             const errorMessage = abortReason === "user" ? "已停止等待，上游任务仍由系统确认" : error instanceof Error ? error.message : "生成失败";
+            const nextLog = { ...log, status: pending ? ("待确认" as const) : ("失败" as const), durationMs: Date.now() - log.createdAt, error: errorMessage };
             setResults([{ id: log.id, status: pending ? "unknown" : "failed", error: errorMessage }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
-            await saveLog({ ...log, status: pending ? "待确认" : "失败", durationMs: Date.now() - log.createdAt, error: errorMessage });
+            await saveLog(nextLog, false);
+            if (pending && abortReason !== "user") resumeLog = nextLog;
             pending ? message.warning(errorMessage) : message.error(errorMessage);
         } finally {
             if (activeControllersRef.current.get(log.id) === controller) activeControllersRef.current.delete(log.id);
+            if (resumeLog) schedulePendingResume(resumeLog, configOverride, agentTaskId);
             if (!activeControllersRef.current.size && !creationControllerRef.current) {
                 setRunning(false);
                 setStartedAt(0);
@@ -415,7 +454,15 @@ export default function VideoPage() {
 
     const stopGeneration = () => {
         creationControllerRef.current?.abort("user");
-        activeControllersRef.current.forEach((controller) => controller.abort("user"));
+        activeControllersRef.current.forEach((controller, id) => {
+            stoppedLogIdsRef.current.add(id);
+            controller.abort("user");
+        });
+        pendingResumeTimersRef.current.forEach((timer, id) => {
+            stoppedLogIdsRef.current.add(id);
+            window.clearTimeout(timer);
+        });
+        pendingResumeTimersRef.current.clear();
     };
 
     const previewGenerationLog = (log: GenerationLog) => {
