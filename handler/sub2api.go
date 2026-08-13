@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -27,7 +28,7 @@ type sub2APIKey struct {
 	Key     string `json:"key"`
 	Name    string `json:"name"`
 	Status  string `json:"status"`
-	Group  *struct {
+	Group   *struct {
 		Name                 string `json:"name"`
 		Platform             string `json:"platform"`
 		AllowImageGeneration bool   `json:"allow_image_generation"`
@@ -59,6 +60,8 @@ type sub2APIUser struct {
 }
 
 var sub2APIHTTPClient = &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+
+const maxSub2APIImageResponseBytes = 64 * 1024 * 1024
 
 // Sub2APIEmbedKeys 读取当前 Sub2API 账号可用 Key，并返回受签名保护的同源代理地址。
 func Sub2APIEmbedKeys(w http.ResponseWriter, r *http.Request) {
@@ -194,9 +197,105 @@ func Sub2APIProxy(c *gin.Context) {
 		return
 	}
 	defer response.Body.Close()
+	if c.Request.Method == http.MethodPost && isSub2APIImagePath(path) {
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxSub2APIImageResponseBytes+1))
+		if readErr != nil {
+			sub2APIError(c.Writer, http.StatusBadGateway, errors.New("读取 Sub2API 图片响应失败"))
+			return
+		}
+		if len(body) > maxSub2APIImageResponseBytes {
+			sub2APIError(c.Writer, http.StatusBadGateway, fmt.Errorf("图片响应超过 %d MB", maxSub2APIImageResponseBytes/(1024*1024)))
+			return
+		}
+		if transformed, changed, transformErr := materializeSub2APIImageResponse(body); transformErr == nil && changed {
+			c.Writer.Header().Set("Content-Type", "application/json")
+			c.Writer.Header().Set("Cache-Control", "no-store")
+			c.Writer.WriteHeader(response.StatusCode)
+			_, _ = c.Writer.Write(transformed)
+			return
+		}
+		copySub2APIResponseHeaders(c.Writer.Header(), response.Header)
+		c.Writer.WriteHeader(response.StatusCode)
+		_, _ = c.Writer.Write(body)
+		return
+	}
 	copySub2APIResponseHeaders(c.Writer.Header(), response.Header)
 	c.Writer.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(c.Writer, response.Body)
+}
+
+func isSub2APIImagePath(path string) bool {
+	path = strings.TrimRight(path, "/")
+	return strings.HasSuffix(path, "/images/generations") || strings.HasSuffix(path, "/images/edits")
+}
+
+func materializeSub2APIImageResponse(body []byte) ([]byte, bool, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, false, err
+	}
+	dataRaw, ok := payload["data"]
+	if !ok {
+		return body, false, nil
+	}
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(dataRaw, &items); err != nil {
+		return body, false, nil
+	}
+	changed := false
+	for _, item := range items {
+		raw, ok := item["b64_json"]
+		if !ok {
+			continue
+		}
+		var encoded string
+		if err := json.Unmarshal(raw, &encoded); err != nil || strings.TrimSpace(encoded) == "" {
+			return body, false, nil
+		}
+		imageData, err := decodeBase64Image(encoded)
+		if err != nil {
+			return body, false, err
+		}
+		contentType := http.DetectContentType(imageData)
+		if !strings.HasPrefix(contentType, "image/") {
+			contentType = "image/png"
+		}
+		id, err := service.SaveTransientImage(imageData, contentType)
+		if err != nil {
+			return body, false, err
+		}
+		urlValue, _ := json.Marshal("/api/generated-images/" + id)
+		item["url"] = urlValue
+		delete(item, "b64_json")
+		changed = true
+	}
+	if !changed {
+		return body, false, nil
+	}
+	payload["data"], _ = json.Marshal(items)
+	transformed, err := json.Marshal(payload)
+	if err != nil {
+		return body, false, err
+	}
+	return transformed, true, nil
+}
+
+func decodeBase64Image(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "data:") {
+		if separator := strings.IndexByte(value, ','); separator >= 0 {
+			value = value[separator+1:]
+		}
+	}
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		return data, nil
+	}
+	data, rawErr := base64.RawStdEncoding.DecodeString(value)
+	if rawErr == nil {
+		return data, nil
+	}
+	return nil, errors.New("Sub2API 返回的图片编码无效")
 }
 
 func sub2APIOrigin(raw string) (string, error) {

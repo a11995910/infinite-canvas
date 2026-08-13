@@ -28,6 +28,9 @@ func New() *gin.Engine {
 	api.GET("/settings", gin.WrapF(handler.Settings))
 	api.GET("/storage/config", gin.WrapF(handler.StorageConfig))
 	api.GET("/proxy-image", gin.WrapF(handler.ProxyImage))
+	api.GET("/generated-images/:id", func(c *gin.Context) {
+		handler.TransientImage(c.Writer, c.Request, c.Param("id"))
+	})
 	api.GET("/files/:id", func(c *gin.Context) {
 		handler.FileInfo(c.Writer, c.Request, c.Param("id"))
 	})

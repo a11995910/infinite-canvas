@@ -2,9 +2,15 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/basketikun/infinite-canvas/config"
 )
 
 func TestFetchSub2APIKeysLoadsAllPages(t *testing.T) {
@@ -39,5 +45,38 @@ func TestFetchSub2APIKeysLoadsAllPages(t *testing.T) {
 	}
 	if len(keys) != 2 || keys[0].Key != "first" || keys[1].Key != "second" {
 		t.Fatalf("keys = %#v, want two pages merged", keys)
+	}
+}
+
+func TestMaterializeSub2APIImageResponse(t *testing.T) {
+	previousDir := config.Cfg.TransientImageDir
+	config.Cfg.TransientImageDir = t.TempDir()
+	t.Cleanup(func() { config.Cfg.TransientImageDir = previousDir })
+
+	png, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	body, _ := json.Marshal(map[string]any{"created": 1, "data": []any{map[string]string{"b64_json": base64.StdEncoding.EncodeToString(png)}}})
+	transformed, changed, err := materializeSub2APIImageResponse(body)
+	if err != nil || !changed {
+		t.Fatalf("materializeSub2APIImageResponse() changed=%v err=%v", changed, err)
+	}
+	var payload struct {
+		Data []map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(transformed, &payload); err != nil {
+		t.Fatalf("decode transformed payload: %v", err)
+	}
+	if len(payload.Data) != 1 || payload.Data[0]["b64_json"] != "" || payload.Data[0]["url"] == "" {
+		t.Fatalf("transformed data = %#v", payload.Data)
+	}
+	matches, _ := filepath.Glob(filepath.Join(config.Cfg.TransientImageDir, "*"))
+	if len(matches) != 1 {
+		t.Fatalf("saved files = %d, want 1", len(matches))
+	}
+	saved, err := os.ReadFile(matches[0])
+	if err != nil || string(saved) != string(png) {
+		t.Fatalf("saved image mismatch: err=%v", err)
 	}
 }
