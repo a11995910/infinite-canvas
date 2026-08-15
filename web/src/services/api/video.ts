@@ -210,8 +210,8 @@ async function createSub2APISeedanceTask(config: AiConfig, model: string, prompt
         prompt: buildSeedancePromptText(prompt, references, [], []),
         duration: normalizeSeedanceDuration(config.videoSeconds),
         resolution: normalizeSeedanceResolution(config.vquality, modelOptionName(model)),
-        size: normalizeSeedanceRatio(config.size),
-        ...(imageUrls.length ? { image_urls: imageUrls } : {}),
+        aspect_ratio: normalizeSeedanceRatio(config.size),
+        ...(imageUrls.length ? { reference_image_urls: imageUrls } : {}),
     };
     assertVideoRequestSize(payload, "Sub2API Seedance 请求");
     try {
