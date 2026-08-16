@@ -206,13 +206,15 @@ async function createSub2APISeedanceTask(config: AiConfig, model: string, prompt
         Promise.all(videoReferences.map(resolveSeedanceVideoUrl)),
         Promise.all(audioReferences.map(resolveSeedanceAudioUrl)),
     ]);
+    const modelName = modelOptionName(model);
+    const sd8 = isSub2APISD8VideoModel(modelName);
     const payload = {
-        model: modelOptionName(model),
+        model: modelName,
         prompt: buildSeedancePromptText(prompt, references, videoReferences, audioReferences),
-        duration: normalizeSeedanceDuration(config.videoSeconds),
-        resolution: normalizeSeedanceResolution(config.vquality, modelOptionName(model)),
+        duration: normalizeSub2APIVideoDuration(config.videoSeconds, modelName),
         aspect_ratio: normalizeSeedanceRatio(config.size),
-        generate_audio: boolConfig(config.videoGenerateAudio, true),
+        ...(!isSub2APIFixedResolutionVideoModel(modelName) ? { resolution: normalizeSeedanceResolution(config.vquality, modelName) } : {}),
+        ...(!sd8 ? { generate_audio: boolConfig(config.videoGenerateAudio, true) } : {}),
         ...(imageUrls.length ? { reference_image_urls: imageUrls } : {}),
         ...(videoUrls.length ? { reference_videos: videoUrls } : {}),
         ...(audioUrls.length ? { reference_audios: audioUrls } : {}),
@@ -230,15 +232,15 @@ async function createSub2APISeedanceTask(config: AiConfig, model: string, prompt
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     try {
         const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${encodeURIComponent(task.id)}`), { headers: aiHeaders(config), signal: options?.signal })).data);
+        const status = String(video.status || "").toLowerCase();
+        if (["failed", "cancelled", "canceled", "expired", "error"].includes(status)) return { status: "failed", error: readApiErrorMessage(video.error) || `视频生成${status === "expired" ? "已过期" : "失败"}` };
         const url = videoResultUrl(video);
         if (url) return { status: "completed", result: await videoResultFromUrl(url, options) };
-        const status = String(video.status || "").toLowerCase();
         if (status === "completed" || status === "succeeded" || status === "done") {
             const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${encodeURIComponent(task.id)}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
             await assertVideoBlob(content.data);
             return { status: "completed", result: { blob: content.data } };
         }
-        if (["failed", "cancelled", "canceled", "expired", "error"].includes(status)) return { status: "failed", error: readApiErrorMessage(video.error) || `视频生成${status === "expired" ? "已过期" : "失败"}` };
         return { status: "pending", progress: normalizeVideoProgress(video.progress) };
     } catch (error) {
         if (isAbortError(error)) throw error;
@@ -390,6 +392,25 @@ function seedanceApiUrl(config: AiConfig, taskId?: string) {
 
 function isSub2APIProxyBaseUrl(baseUrl: string) {
     return baseUrl.toLowerCase().includes("/api/sub2api/proxy/");
+}
+
+function isSub2APISD8VideoModel(model: string) {
+    return model.trim().toLowerCase().startsWith("sd8-seedance-2.0");
+}
+
+function isSub2APIFixedResolutionVideoModel(model: string) {
+    const value = model.trim().toLowerCase();
+    return value.includes("seedance-2.5-480p") || value.includes("seedance-2.5-720p") ||
+        value.includes("seedance-2.0-1080p") || value.includes("seedance-2-0-1080p") ||
+        value.startsWith("sd7-seedance-2.0-720p") || value.startsWith("sd8-seedance-2.0") || value === "seedance-2.0";
+}
+
+function normalizeSub2APIVideoDuration(value: string, model: string) {
+    const duration = normalizeSeedanceDuration(value);
+    if (!isSub2APISD8VideoModel(model)) return duration;
+    if (duration >= 15) return 15;
+    if (duration >= 10) return 10;
+    return 5;
 }
 
 async function buildSeedanceContent(config: AiConfig, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
