@@ -12,7 +12,7 @@ import { VIDEO_GENERATION_TIMEOUT_MS } from "./video-constants";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-type VideoResponse = { id: string; status?: string; progress?: number | string; error?: { message?: string } | string; url?: string; result_url?: string; video_url?: string; content?: { video_url?: string; url?: string } | null };
+type VideoResponse = { id: string; status?: string; progress?: number | string; error?: { message?: string } | string; url?: string; result_url?: string; video_url?: string; content?: { video_url?: string; url?: string } | null; metadata?: { video_url?: string; url?: string } };
 type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
 type SeedanceTask = {
     id: string;
@@ -201,17 +201,21 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
 }
 
 async function createSub2APISeedanceTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
-    if (videoReferences.length || audioReferences.length) {
-        throw new Error("Sub2API Seedance 当前仅支持提示词和参考图片，请移除参考视频或参考音频");
-    }
-    const imageUrls = await Promise.all(references.slice(0, SEEDANCE_REFERENCE_LIMITS.images).map(imageToDataUrl));
+    const [imageUrls, videoUrls, audioUrls] = await Promise.all([
+        Promise.all(references.map(imageToDataUrl)),
+        Promise.all(videoReferences.map(resolveSeedanceVideoUrl)),
+        Promise.all(audioReferences.map(resolveSeedanceAudioUrl)),
+    ]);
     const payload = {
         model: modelOptionName(model),
-        prompt: buildSeedancePromptText(prompt, references, [], []),
+        prompt: buildSeedancePromptText(prompt, references, videoReferences, audioReferences),
         duration: normalizeSeedanceDuration(config.videoSeconds),
         resolution: normalizeSeedanceResolution(config.vquality, modelOptionName(model)),
         aspect_ratio: normalizeSeedanceRatio(config.size),
+        generate_audio: boolConfig(config.videoGenerateAudio, true),
         ...(imageUrls.length ? { reference_image_urls: imageUrls } : {}),
+        ...(videoUrls.length ? { reference_videos: videoUrls } : {}),
+        ...(audioUrls.length ? { reference_audios: audioUrls } : {}),
     };
     assertVideoRequestSize(payload, "Sub2API Seedance 请求");
     try {
@@ -489,7 +493,7 @@ function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
 }
 
 function videoResultUrl(payload: VideoResponse | SeedanceTask) {
-    return [payload.video_url, payload.result_url, payload.url, payload.content?.video_url, payload.content?.url].find((url) => typeof url === "string" && (isPublicMediaUrl(url) || /\.mp4(\?|#|$)/i.test(url)));
+    return [payload.video_url, payload.result_url, payload.url, payload.content?.video_url, payload.content?.url, "metadata" in payload ? payload.metadata?.video_url : undefined, "metadata" in payload ? payload.metadata?.url : undefined].find((url) => typeof url === "string" && (isPublicMediaUrl(url) || /\.mp4(\?|#|$)/i.test(url)));
 }
 
 function grokVideoResultUrl(payload: GrokVideoTaskResponse) {
